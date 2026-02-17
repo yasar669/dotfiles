@@ -51,23 +51,28 @@ Her adapter su fonksiyonlari tanimlar:
 | BORSA_emir_iptal | Acik emri iptal eder |
 | BORSA_emirler | Acik emirleri listeler |
 
-Yonetici katman (04-borsa.sh) su sekilde calisir:
+### 3.2 Baglanti Yontemleri
+
+Borsalarin hepsinin API'si yok. Her adapter kendi baglanti yontemini bilir, yonetici katman bunu umursamaz.
+
+| Borsa | API Durumu | Baglanti Yontemi |
+|-------|-----------|-----------------|
+| Binance | Acik REST API | curl + jq + openssl (HMAC imza) |
+| OKX | Acik REST API | curl + jq + openssl (HMAC imza) |
+| Ziraat | API yok | Python + Selenium (web otomasyon) |
+| Osmanli | API yok | Python + Selenium (web otomasyon) |
+| Akbank | API yok | Python + Selenium (web otomasyon) |
+| Is Bankasi | API yok | Python + Selenium (web otomasyon) |
+
+API olan borsalarda adapter dogrudan curl ile istek atar. API olmayan borsalarda adapter bir Python scripti calistirip ciktisini okur. Her iki durumda da fonksiyon ayni formatta sonuc dondurur.
+
+### 3.3 Ornek Akis
 
 ```
-borsa_bakiye binance   -> "${borsa_adi}_bakiye_al" -> binance_bakiye_al()
-borsa_bakiye ziraat    -> "${borsa_adi}_bakiye_al" -> ziraat_bakiye_al()
-borsa_emir okx al BTC  -> "${borsa_adi}_emir_ver"  -> okx_emir_ver()
-```
-
-Yeni borsa eklemek icin sadece borsalar/ altina yeni bir .sh dosyasi eklenip ayni fonksiyonlar tanimlanir. Yonetici kodu hic degismez.
-
-### 3.2 Ornek Akis
-
-```
-borsa_bakiye binance         -> curl ile Binance API -> jq ile parse -> terminale yaz
-borsa_bakiye ziraat          -> python3 scraper -> sonucu bash'e dondur
-borsa_emir binance al BTC 100 -> curl ile API cagrisi
-borsa_strateji baslat fisher -> freqtrade calistir
+borsa_bakiye binance   -> binance_bakiye_al() -> curl ile Binance REST API -> jq ile parse -> terminale yaz
+borsa_bakiye ziraat    -> ziraat_bakiye_al()  -> python3 scraper calistir  -> ciktiyi oku  -> terminale yaz
+borsa_emir okx al BTC  -> okx_emir_ver()      -> curl ile OKX REST API    -> jq ile parse -> terminale yaz
+borsa_fiyat akbank     -> akbank_fiyat_al()   -> python3 scraper calistir  -> ciktiyi oku  -> terminale yaz
 ```
 
 ## 4. Dis Bagimliliklar
