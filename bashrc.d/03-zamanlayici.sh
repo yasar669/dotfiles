@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # ============================================================
 # 03-zamanlayici.sh - Terminal Tabanli Alarm ve Geri Sayim Araci
 # ============================================================
@@ -49,10 +50,10 @@ _ses_cal() {
     local tekrar=${1:-$VARSAYILAN_TEKRAR}
     local aralik=${2:-$VARSAYILAN_ARALIK}
     local i=0
-    while [ $i -lt $tekrar ]; do
+    while [ "$i" -lt "$tekrar" ]; do
         paplay "$ALARM_SES" 2>/dev/null
         i=$((i + 1))
-        if [ $i -lt $tekrar ]; then
+        if [ "$i" -lt "$tekrar" ]; then
             sleep "$aralik"
         fi
     done
@@ -238,8 +239,10 @@ gerisayim() {
         local yuzde=$(( (toplam_saniye - kalan) * 100 / toplam_saniye ))
         local cubuk_dolu=$(( yuzde / 5 ))
         local cubuk_bos=$(( 20 - cubuk_dolu ))
-        local cubuk=$(printf '%0.s#' $(seq 1 $cubuk_dolu 2>/dev/null))
-        local bosluk=$(printf '%0.s-' $(seq 1 $cubuk_bos 2>/dev/null))
+        local cubuk
+        cubuk=$(printf '%0.s#' $(seq 1 "$cubuk_dolu" 2>/dev/null))
+        local bosluk
+        bosluk=$(printf '%0.s-' $(seq 1 "$cubuk_bos" 2>/dev/null))
 
         printf "\r  [$isim] [%s%s] %3d%%  Kalan: %s  " "$cubuk" "$bosluk" "$yuzde" "$(_zaman_goster $kalan)"
         sleep 1
@@ -319,15 +322,18 @@ alarm() {
     local hedef_sa=${hedef_saat%%:*}
     local hedef_dk=${hedef_saat##*:}
 
-    if [ $hedef_sa -gt 23 ] || [ $hedef_dk -gt 59 ]; then
+    if [ "$hedef_sa" -gt 23 ] || [ "$hedef_dk" -gt 59 ]; then
         echo "HATA: Gecersiz saat."
         return 1
     fi
 
     # Simdi ile hedef arasi farki hesapla
-    local simdi=$(date +%s)
-    local bugun=$(date +%Y-%m-%d)
-    local hedef=$(date -d "$bugun $hedef_saat" +%s 2>/dev/null)
+    local simdi
+    simdi=$(date +%s)
+    local bugun
+    bugun=$(date +%Y-%m-%d)
+    local hedef
+    hedef=$(date -d "$bugun $hedef_saat" +%s 2>/dev/null)
 
     if [ -z "$hedef" ]; then
         echo "HATA: Tarih hesaplanamadi."
@@ -335,8 +341,9 @@ alarm() {
     fi
 
     # Eger hedef saat gecmisse, yarini al
-    if [ $hedef -le $simdi ]; then
-        local yarin=$(date -d "+1 day" +%Y-%m-%d)
+    if [ "$hedef" -le "$simdi" ]; then
+        local yarin
+        yarin=$(date -d "+1 day" +%Y-%m-%d)
         hedef=$(date -d "$yarin $hedef_saat" +%s)
         echo "Not: Belirtilen saat gecmis, yarin $hedef_saat icin alarm kuruldu."
     fi
@@ -572,7 +579,8 @@ aktif_listele() {
     local var=0
     for pid_dosya in "$ZAMANLAYICI_DIZIN"/aktif_*.pid; do
         if [ -f "$pid_dosya" ]; then
-            local pid=$(cat "$pid_dosya")
+            local pid
+            pid=$(cat "$pid_dosya")
             if kill -0 "$pid" 2>/dev/null; then
                 echo "  PID: $pid"
                 var=1
@@ -598,7 +606,8 @@ zamanlayici_durdur() {
     if [ "$1" = "hepsi" ]; then
         for pid_dosya in "$ZAMANLAYICI_DIZIN"/aktif_*.pid; do
             if [ -f "$pid_dosya" ]; then
-                local pid=$(cat "$pid_dosya")
+                local pid
+                pid=$(cat "$pid_dosya")
                 kill "$pid" 2>/dev/null
                 rm -f "$pid_dosya"
             fi

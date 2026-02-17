@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # ~/.bashrc: executed by bash(1) for non-login shells.
 
 # Interaktif degilse hicbir sey yapma
@@ -41,6 +42,7 @@ DOTFILES_DIZIN="$HOME/dotfiles"
 if [ -d "$DOTFILES_DIZIN/bashrc.d" ]; then
     # 1. Ana modulleri sirayla yukle (01-xxx.sh, 02-xxx.sh, ...)
     for modul in "$DOTFILES_DIZIN/bashrc.d"/*.sh; do
+        # shellcheck source=/dev/null
         [ -f "$modul" ] && source "$modul"
     done
     
@@ -48,6 +50,7 @@ if [ -d "$DOTFILES_DIZIN/bashrc.d" ]; then
     for alt_klasor in "$DOTFILES_DIZIN/bashrc.d"/*/; do
         [ -d "$alt_klasor" ] || continue
         for alt_modul in "$alt_klasor"*.sh; do
+            # shellcheck source=/dev/null
             [ -f "$alt_modul" ] && source "$alt_modul"
         done
     done

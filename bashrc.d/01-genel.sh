@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # ============================================================
 # 01-genel.sh - Prompt, renkler, alias ve tamamlama ayarlari
 # ============================================================
@@ -58,7 +59,7 @@ NEWLINE_BEFORE_PROMPT=yes
 
 if [ "$color_prompt" = yes ]; then
     # override default virtualenv indicator in prompt
-    VIRTUAL_ENV_DISABLE_PROMPT=1
+    export VIRTUAL_ENV_DISABLE_PROMPT=1
 
     prompt_color='\[\033[;32m\]'
     info_color='\[\033[1;34m\]'
@@ -98,7 +99,11 @@ esac
 
 # enable color support of ls, less and man, and also add handy aliases
 if [ -x /usr/bin/dircolors ]; then
-    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
+    if test -r ~/.dircolors; then
+        eval "$(dircolors -b ~/.dircolors)"
+    else
+        eval "$(dircolors -b)"
+    fi
     export LS_COLORS="$LS_COLORS:ow=30;44:" # fix ls color for folders with 777 permissions
 
     alias ls='ls --color=auto'
@@ -134,6 +139,7 @@ alias l='ls -CF'
 # See /usr/share/doc/bash-doc/examples in the bash-doc package.
 
 if [ -f ~/.bash_aliases ]; then
+    # shellcheck source=/dev/null
     . ~/.bash_aliases
 fi
 
@@ -142,8 +148,10 @@ fi
 # sources /etc/bash.bashrc).
 if ! shopt -oq posix; then
   if [ -f /usr/share/bash-completion/bash_completion ]; then
+    # shellcheck source=/dev/null
     . /usr/share/bash-completion/bash_completion
   elif [ -f /etc/bash_completion ]; then
+    # shellcheck source=/dev/null
     . /etc/bash_completion
   fi
 fi

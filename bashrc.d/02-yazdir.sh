@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # ============================================================
 # 02-yazdir.sh - PDF ve Markdown Yazdirma Araci
 # HP DeskJet 2540 icin optimize edilmis
@@ -165,6 +166,7 @@ with open('$html_gecici', 'w', encoding='utf-8') as f:
     f.write(html_tam)
 " 2>/dev/null
 
+        # shellcheck disable=SC2181
         if [ $? -ne 0 ]; then
             echo "HATA: Markdown -> HTML donusumu basarisiz!"
             return 1
@@ -173,6 +175,7 @@ with open('$html_gecici', 'w', encoding='utf-8') as f:
         # Google Chrome headless ile HTML'den PDF olustur
         google-chrome --headless --disable-gpu --no-sandbox --print-to-pdf="$pdf_gecici" "$html_gecici" 2>/dev/null
 
+        # shellcheck disable=SC2181
         if [ $? -ne 0 ] || [ ! -f "$pdf_gecici" ]; then
             echo "HATA: HTML -> PDF donusumu basarisiz!"
             return 1
@@ -184,7 +187,8 @@ with open('$html_gecici', 'w', encoding='utf-8') as f:
         dosya="$pdf_gecici"
         
         if [ "$aralik" == "tumu" ] || [ "$aralik" == "hepsi" ]; then
-            local toplam_sayfa=$(python3 -c "
+            local toplam_sayfa
+            toplam_sayfa=$(python3 -c "
 import subprocess
 result = subprocess.run(['pdfinfo', '$pdf_gecici'], capture_output=True, text=True)
 for line in result.stdout.split('\n'):
@@ -211,8 +215,10 @@ for line in result.stdout.split('\n'):
     IFS=',' read -ra parcalar <<< "$aralik"
     for parca in "${parcalar[@]}"; do
         if [[ "$parca" == *-* ]]; then
-            local bas=$(echo "$parca" | cut -d'-' -f1)
-            local bit=$(echo "$parca" | cut -d'-' -f2)
+            local bas
+            bas=$(echo "$parca" | cut -d'-' -f1)
+            local bit
+            bit=$(echo "$parca" | cut -d'-' -f2)
             sayfa_sayisi=$((sayfa_sayisi + bit - bas + 1))
         else
             sayfa_sayisi=$((sayfa_sayisi + 1))
@@ -232,9 +238,7 @@ for line in result.stdout.split('\n'):
     echo ""
 
     echo "PDF hazirlaniyor (2 sayfa/A4, yatay)..."
-    pdfjam --nup 2x1 --landscape --outfile "$gecici" "$dosya" "$aralik" 2>/dev/null
-
-    if [ $? -ne 0 ]; then
+    if ! pdfjam --nup 2x1 --landscape --outfile "$gecici" "$dosya" "$aralik" 2>/dev/null; then
         echo "HATA: pdfjam basarisiz oldu!"
         return 1
     fi
@@ -265,7 +269,7 @@ for line in result.stdout.split('\n'):
 
     echo ""
     echo "ADIM 2: Kagitlari yazicidan al, ters cevir ve tepsiye geri koy."
-    read -p "Hazir olunca ENTER'a bas..."
+    read -rp "Hazir olunca ENTER'a bas..."
 
     echo ""
     echo "ADIM 3: Arka yuzler yazdiriliyor (A4 sayfa: $arka_yuzler)..."
