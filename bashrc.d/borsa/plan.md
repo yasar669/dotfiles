@@ -91,7 +91,7 @@ API anahtarlari repoya konmaz. Her bilgisayarda yerel dosya olusturulur.
 | .borsa_anahtarlar | ~/.borsa_anahtarlar | API key ve secret degerleri |
 | .gitignore | repo koku | .borsa_anahtarlar satirini icerir |
 
-ayar.sh bu dosyayi source eder. Repo sadece fonksiyonlari tutar.
+ayar.sh, bashrc tarafindan otomatik yuklenir ve icinde ~/.borsa_anahtarlar dosyasini source ederek gizli API bilgilerini belleğe alir. Repo sadece fonksiyonlari tutar, anahtarlar repoya girmez.
 
 ## 6. Komut Listesi
 
