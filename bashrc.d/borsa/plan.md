@@ -10,20 +10,18 @@ GitHub'da tutuldugu icin herhangi bir bilgisayarda git pull ile hemen kullanima 
 
 ```
 bashrc.d/
-├── 04-borsa.sh                  # Ana modul (tum alt modulleri yukler)
+├── 04-borsa.sh                  # Ana modul (adapter yonetici, tum alt modulleri yukler)
 └── borsa/
     ├── plan.md                  # Bu dosya
     ├── ayar.sh                  # API anahtarlari, genel yapilandirma
     ├── yardimci.sh              # Ortak fonksiyonlar (renk, log, format)
-    ├── kripto/
-    │   ├── binance.sh           # Binance API (curl + jq)
-    │   ├── okx.sh               # OKX API (curl + jq)
-    │   └── ortak_kripto.sh      # Ortak kripto fonksiyonlari
-    ├── tr_borsa/
-    │   ├── ziraat.sh            # Ziraat Yatirim (web scrape)
-    │   ├── osmanli.sh           # Osmanli Yatirim (web scrape)
-    │   ├── akbank.sh            # Akbank Yatirim
-    │   └── isbank.sh            # Is Bankasi Yatirim
+    ├── borsalar/
+    │   ├── binance.sh           # Binance adapter (curl + jq)
+    │   ├── okx.sh               # OKX adapter (curl + jq)
+    │   ├── ziraat.sh            # Ziraat Yatirim adapter (python + selenium)
+    │   ├── osmanli.sh           # Osmanli Yatirim adapter (python + selenium)
+    │   ├── akbank.sh            # Akbank Yatirim adapter (python + selenium)
+    │   └── isbank.sh            # Is Bankasi Yatirim adapter (python + selenium)
     └── strateji/
         ├── freqtrade_yonet.sh   # Freqtrade baslat/durdur/test
         └── sinyal.sh            # Alim-satim sinyal sistemi
@@ -31,7 +29,7 @@ bashrc.d/
 
 ## 3. Mimari
 
-Bash her seyi yonetir, agir isi Python'a devreder.
+Bash her seyi yonetir, agir isi Python'a devreder. Tum borsalar adapter kalibini kullanir.
 
 | Katman | Arac | Aciklama |
 |--------|------|----------|
@@ -39,7 +37,31 @@ Bash her seyi yonetir, agir isi Python'a devreder.
 | Python (hesaplama) | ccxt, selenium, pandas | Karmasik analiz, web scraping, ML |
 | Freqtrade (algo) | freqtrade framework | Otomatik alim-satim botlari |
 
-### 3.1 Ornek Akis
+### 3.1 Adapter Kalibi
+
+Her borsa dosyasi ayni fonksiyon arayuzunu uygulamak zorundadir. 04-borsa.sh yonetici katmani, borsa adina gore dinamik fonksiyon cagrisi yapar.
+
+Her adapter su fonksiyonlari tanimlar:
+
+| Fonksiyon | Aciklama |
+|-----------|----------|
+| BORSA_bakiye_al | Hesap bakiyesini getirir |
+| BORSA_fiyat_al | Sembol fiyatini sorgular |
+| BORSA_emir_ver | Alim/satim emri gonderir |
+| BORSA_emir_iptal | Acik emri iptal eder |
+| BORSA_emirler | Acik emirleri listeler |
+
+Yonetici katman (04-borsa.sh) su sekilde calisir:
+
+```
+borsa_bakiye binance   -> "${borsa_adi}_bakiye_al" -> binance_bakiye_al()
+borsa_bakiye ziraat    -> "${borsa_adi}_bakiye_al" -> ziraat_bakiye_al()
+borsa_emir okx al BTC  -> "${borsa_adi}_emir_ver"  -> okx_emir_ver()
+```
+
+Yeni borsa eklemek icin sadece borsalar/ altina yeni bir .sh dosyasi eklenip ayni fonksiyonlar tanimlanir. Yonetici kodu hic degismez.
+
+### 3.2 Ornek Akis
 
 ```
 borsa_bakiye binance         -> curl ile Binance API -> jq ile parse -> terminale yaz
