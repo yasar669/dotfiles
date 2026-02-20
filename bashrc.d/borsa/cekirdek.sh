@@ -605,3 +605,7 @@ borsa() {
 }
 
 export -f borsa
+
+# Tab tamamlama (completion) yukleme
+# shellcheck source=/home/yasar/dotfiles/bashrc.d/borsa/tamamlama.sh
+source "${BORSA_KLASORU}/tamamlama.sh"
