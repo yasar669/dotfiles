@@ -2,164 +2,229 @@
 
 ## 1. Genel Bakis
 
-Bu modul tum borsa islemlerini terminalden yonetmeyi saglar.
+Bu modul BIST (Borsa Istanbul) hisse senedi islemlerini terminalden yonetmeyi saglar.
+Tum altyapi saf Bash + curl ile calisir, dis bagimliligi yoktur (Python, Selenium vs. kullanilmaz).
 bashrc.d/ klasorunde bulundugu icin her terminal acildiginda otomatik yuklenir.
-GitHub'da tutuldugu icin herhangi bir bilgisayarda git pull ile hemen kullanima hazir hale gelir.
 
-## 2. Klasor Yapisi
+## 2. Mevcut Durum
 
-```
-bashrc.d/
-├── 04-borsa.sh                  # Ana modul (adapter yonetici, tum alt modulleri yukler)
-└── borsa/
-    ├── plan.md                  # Bu dosya
-    ├── ayar.sh                  # API anahtarlari, genel yapilandirma
-    ├── yardimci.sh              # Ortak fonksiyonlar (renk, log, format)
-    ├── borsalar/
-    │   ├── binance.sh           # Binance adapter (curl + jq)
-    │   ├── okx.sh               # OKX adapter (curl + jq)
-    │   ├── ziraat.sh            # Ziraat Yatirim adapter (python + selenium)
-    │   ├── osmanli.sh           # Osmanli Yatirim adapter (python + selenium)
-    │   ├── akbank.sh            # Akbank Yatirim adapter (python + selenium)
-    │   └── isbank.sh            # Is Bankasi Yatirim adapter (python + selenium)
-    └── strateji/
-        ├── freqtrade_yonet.sh   # Freqtrade baslat/durdur/test
-        └── sinyal.sh            # Alim-satim sinyal sistemi
-```
+Sistem uc katmandan olusur: cekirdek altyapi, BIST kural motoru ve kurum adaptorleri.
 
-## 3. Mimari
-
-Bash her seyi yonetir, agir isi Python'a devreder. Tum borsalar adapter kalibini kullanir.
-
-| Katman | Arac | Aciklama |
-|--------|------|----------|
-| Bash (yonetim) | curl, jq, openssl | API cagrisi, sonuc okuma, komut arayuzu |
-| Python (hesaplama) | ccxt, selenium, pandas | Karmasik analiz, web scraping, ML |
-| Freqtrade (algo) | freqtrade framework | Otomatik alim-satim botlari |
-
-### 3.1 Adapter Kalibi
-
-Her borsa dosyasi ayni fonksiyon arayuzunu uygulamak zorundadir. 04-borsa.sh yonetici katmani, borsa adina gore dinamik fonksiyon cagrisi yapar.
-
-Her adapter su fonksiyonlari tanimlar:
-
-| Fonksiyon | Aciklama |
-|-----------|----------|
-| BORSA_bakiye_al | Hesap bakiyesini getirir |
-| BORSA_fiyat_al | Sembol fiyatini sorgular |
-| BORSA_emir_ver | Alim/satim emri gonderir |
-| BORSA_emir_iptal | Acik emri iptal eder |
-| BORSA_emirler | Acik emirleri listeler |
-
-### 3.2 Baglanti Yontemleri
-
-Borsalarin hepsinin API'si yok. Her adapter kendi baglanti yontemini bilir, yonetici katman bunu umursamaz.
-
-| Borsa | API Durumu | Baglanti Yontemi |
-|-------|-----------|-----------------|
-| Binance | Acik REST API | curl + jq + openssl (HMAC imza) |
-| OKX | Acik REST API | curl + jq + openssl (HMAC imza) |
-| Ziraat | API yok | Bash + Curl (Reverse Engineering) |
-| Osmanli | API yok | Bash + Curl (Reverse Engineering) |
-| Akbank | API yok | Bash + Curl (Reverse Engineering) |
-| Is Bankasi | API yok | Bash + Curl (Reverse Engineering) |
-
-API olan borsalarda adapter API dokumantasyonuna gore calisir. API olmayanlarda ise web trafigi taklit edilerek (reverse engineering) curl ile islem yapilir. HTML parse icin grep/sed/pup, JSON icin jq kullanilir.
-
-### 3.3 Ornek Akis
+### 2.1 Klasor Yapisi
 
 ```
-borsa_bakiye binance   -> binance_bakiye_al() -> curl ile Binance REST API -> jq ile parse -> terminale yaz
-borsa_bakiye ziraat    -> ziraat_bakiye_al()  -> python3 scraper calistir  -> ciktiyi oku  -> terminale yaz
-borsa_emir okx al BTC  -> okx_emir_ver()      -> curl ile OKX REST API    -> jq ile parse -> terminale yaz
-borsa_fiyat akbank     -> akbank_fiyat_al()   -> python3 scraper calistir  -> ciktiyi oku  -> terminale yaz
+bashrc.d/borsa/
+  cekirdek.sh              # Jenerik altyapi (HTTP, oturum, yonlendirme)
+  tamamlama.sh             # Bash TAB completion
+  plan.md                  # Bu dosya
+  kurallar/
+    bist.sh                # BIST Pay Piyasasi kural motoru
+  adaptorler/
+    ziraat.sh              # Ziraat Yatirim adaptoru
+    ziraat.ayarlar.sh      # Ziraat URL ve secici ayarlari
+    sablon.sh              # Yeni adaptor sablonu
+    sablon.ayarlar.sh      # Yeni adaptor ayar sablonu
 ```
 
-## 4. Dis Bagimliliklar
+### 2.2 Tamamlanan Islevler
 
-| Paket | Amac | Kurulum |
-|-------|------|---------|
-| curl | API cagrisi | Genelde yuklu gelir |
-| jq | JSON parse | sudo apt install jq |
-| openssl | HMAC imzalama | Genelde yuklu gelir |
-| python3 | Scraping ve analiz | Genelde yuklu gelir |
-| ccxt (python) | Kripto borsa kutuphanesi | pip install ccxt |
-| selenium (python) | Web scraping | pip install selenium |
-| freqtrade | Algoritmik ticaret | pip install freqtrade |
+| Islev | Komut | Durum |
+|-------|-------|-------|
+| Giris (SMS dogrulama dahil) | borsa ziraat giris | Tamam |
+| Bakiye/Portfoy sorgulama | borsa ziraat bakiye | Tamam |
+| Emir gonderme (limit) | borsa ziraat emir SEMBOL alis/satis LOT FIYAT | Tamam |
+| Emir listeleme | borsa ziraat emirler | Tamam |
+| Emir iptal | borsa ziraat iptal EMIR_ID | Tamam |
+| Coklu hesap yonetimi | borsa ziraat hesap/hesaplar | Tamam |
+| BIST fiyat adimi dogrulama | Emir oncesi otomatik | Tamam |
+| Seans disi minimum tutar (Ziraat) | Emir oncesi otomatik | Tamam |
+| Tab tamamlama | borsa TAB | Tamam |
+| BIST kural sorgulama | borsa kurallar seans/fiyat/tavan/taban | Tamam |
 
-## 5. Guvenlik
+### 2.3 Eksik Islevler
 
-API anahtarlari repoya konmaz. Her bilgisayarda yerel dosya olusturulur.
+| Islev | Engel | Oncelik |
+|-------|-------|---------|
+| Tavan/taban fiyat kontrolu | Canli fiyat verisi lazim | Yuksek |
+| Alis gucu / satilabilir lot kontrolu | Veri lazim | Yuksek |
+| Sembol dogrulama | Veri lazim | Orta |
+| Canli fiyat gosterme | Veri lazim | Orta |
+| Portfoy detay (hisse bazli) | HTML parse lazim | Dusuk |
+| Oturum kapatma (cikis) | Endpoint biliniyor | Dusuk |
 
-| Dosya | Konum | Icerik |
-|-------|-------|--------|
-| .borsa_anahtarlar | ~/.borsa_anahtarlar | API key ve secret degerleri |
-| .gitignore | repo koku | .borsa_anahtarlar satirini icerir |
+## 3. Veri Cekme Mimarisi
 
-ayar.sh, bashrc tarafindan otomatik yuklenir ve icinde ~/.borsa_anahtarlar dosyasini source ederek gizli API bilgilerini belleğe alir. Repo sadece fonksiyonlari tutar, anahtarlar repoya girmez.
+Ziraat Yatirim'in web arayuzu AJAX ile JSON veri cekerken kullandigi endpointler kesfedildi.
+Bu endpointler oturum acikken curl ile de cagrilabilir.
 
-## 6. Komut Listesi
+### 3.1 Kesfedilen Endpointler
 
-### 6.1 Bakiye Sorgulama
+Asagidaki endpointler emir sayfasi HTML ve JavaScript kodu analiz edilerek belirlendi.
 
-```
-borsa_bakiye binance         # Binance bakiyesi
-borsa_bakiye okx             # OKX bakiyesi
-borsa_bakiye ziraat          # Ziraat Yatirim bakiyesi
-borsa_bakiye hepsi           # Tum borsalardaki bakiyeler
-```
+#### 3.1.1 Hisse Bilgi Sorgulama (En Kritik)
 
-### 6.2 Emir Verme
-
-```
-borsa_emir binance al BTC/USDT 0.001
-borsa_emir okx sat ETH/USDT 0.5
-borsa_emir binance iptal EMIR_ID
-```
-
-### 6.3 Fiyat Takip
+Endpoint: /sanalsube/tr/Equity/JsonGetEquityInformation
 
 ```
-borsa_fiyat BTC              # Tum borsalardaki BTC fiyati
-borsa_fiyat THYAO            # Turk borsasindaki THYAO
-borsa_fiyat ETH --canli      # Canli fiyat akisi
+Metot  : POST
+Girdi  : { code: "THYAO", valueDate: "20.02.2026", transactionTypeName: "LOT", isFinInstId: false }
+Cikti  : {
+  InfoEQ: {
+    Code, FinistId, Group,
+    LastPrice,                    # Son fiyat
+    BidPrice, AskPrice,           # Alis/Satis fiyati
+    AvgPrice,                     # Ortalama fiyat
+    HighPrice, LowPrice,          # Gun ici en yuksek/en dusuk
+    UpperLimit, LowerLimit,       # Tavan / Taban
+    Change,                       # Yuzde degisim
+    TradingSessionDesc,           # Seans durumu metni
+    MaxLot, CollateralRate,       # Maksimum lot, teminat orani
+    EquityTradeLimit              # Islem limiti
+  }
+}
 ```
 
-### 6.4 Strateji Yonetimi
+Bu tek endpoint ile tavan/taban kontrolu, canli fiyat gosterme ve seans durumu bilgisi saglanir.
+
+#### 3.1.2 Alis Gucu / Satilabilir Lot
+
+Endpoint: /sanalsube/tr/Equity/JsonGetEquityTradeLimit
 
 ```
-borsa_strateji test fisher BTC/USDT    # Backtest calistir
-borsa_strateji baslat fisher           # Canli bot baslat
-borsa_strateji durdur fisher           # Botu durdur
-borsa_strateji durum                   # Aktif botlari goster
+Metot  : GET
+Girdi  : ?finistId=<FinistId>  (3.1.1'den alinir)
+Cikti  : {
+  Data: {
+    EquityTradeLimit,             # Alis gucu (TL)
+    SellUnit                      # Satilabilir lot miktari
+  }
+}
 ```
 
-### 6.5 Portfoy Ozeti
+Bu endpoint ile emir gondermeden once "paraniz yetmiyor" veya "elinizde bu kadar hisse yok" uyarisi verilebilir.
+
+#### 3.1.3 Sembol Arama / Dogrulama
+
+Endpoint: /sanalsube/tr/Equity/FindEquityOrViopCodeAutoComplete
 
 ```
-borsa_portfoy                # Tum borsalardaki toplam varlik
-borsa_portfoy --detay        # Borsalara gore dagilim
-borsa_portfoy --gecmis 30    # Son 30 gunluk performans
+Metot  : GET
+Girdi  : ?subMarketName=F&type=EQ&query=THY
+Cikti  : [ { value: "THYAO", data: { id: "...", category: "..." } }, ... ]
 ```
 
-## 7. Yol Haritasi
+Bu endpoint ile yanlis sembol girildiginde uyari verilebilir ve TAB ile sembol tamamlama yapilabilir.
 
-### 7.1 Asama 1 - Temel Iskelet
+#### 3.1.4 Diger Bilinen Endpointler
 
-04-borsa.sh ana modulu, borsa/ayar.sh yapilandirma, borsa/yardimci.sh ortak fonksiyonlar ve bagimlilk kontrolu (jq, curl, openssl) olusturulacak.
+| Endpoint | Amac | Oncelik |
+|----------|------|---------|
+| /Account/LogOff | Oturum kapatma | Dusuk |
+| /Equity/ListCharacteristic | Kiymet ozellikleri listesi | Dusuk |
+| /Reports/CashAccountTransactions | Hesap hareketleri | Gelecek |
+| /Reports/EQTransactionVolumeDetails | Islem hacim detayi | Gelecek |
 
-### 7.2 Asama 2 - Binance Entegrasyonu
+### 3.2 Veri Akis Semalari
 
-HMAC imzalama fonksiyonu, bakiye sorgulama, fiyat sorgulama ve emir verme (al/sat/iptal) yazilacak.
+Mevcut emir gonderme akisi:
 
-### 7.3 Asama 3 - OKX Entegrasyonu
+```
+kullanici -> fiyat adimi kontrolu -> seans disi tutar kontrolu -> POST emir -> sunucu yaniti
+```
 
-OKX API imzalama, bakiye/emir fonksiyonlari ve fiyat sorgulama eklenecek.
+Hedef emir gonderme akisi:
 
-### 7.4 Asama 4 - Turk Borsalari
+```
+kullanici -> fiyat adimi kontrolu -> seans disi tutar kontrolu
+          -> JsonGetEquityInformation (tavan/taban, son fiyat)
+          -> tavan/taban kontrolu
+          -> JsonGetEquityTradeLimit (alis gucu / satilabilir lot)
+          -> bakiye/lot yeterlilik kontrolu
+          -> POST emir -> sunucu yaniti
+```
 
-Ziraat Yatirim, Osmanli Yatirim, Akbank ve Is Bankasi icin selenium tabanli scraper yazilacak.
+### 3.3 Tasarim Kararlari
 
-### 7.5 Asama 5 - Strateji ve Otomasyon
+Veri cekme katmani saf adaptor isidir (Ziraat'e ozgu). Cekirdek'e eklenmez.
+Her adaptor kendi veri cekme fonksiyonlarini yazabilir, arayuz zorunlulugu yoktur.
 
-Freqtrade entegrasyonu, sinyal sistemi ve portfoy takip/raporlama eklenecek.
+Veri cekme fonksiyonlari soyle adlandirilir:
+
+```
+_ziraat_hisse_bilgi_al <sembol>          # JsonGetEquityInformation wrapper
+_ziraat_alis_gucu_al <finistid>          # JsonGetEquityTradeLimit wrapper
+_ziraat_sembol_ara <sorgu>               # FindEquityOrViopCodeAutoComplete wrapper
+```
+
+JSON parse icin jq tercih edilir. jq yoksa grep/sed ile fallback yapilir.
+
+## 4. Yol Haritasi
+
+### 4.1 Asama 1 - Hisse Bilgi Sorgulama
+
+JsonGetEquityInformation endpointine curl ile POST atilir.
+JSON yanitindan LastPrice, UpperLimit, LowerLimit, TradingSessionDesc parse edilir.
+Yeni komut eklenir: borsa ziraat fiyat SEMBOL
+
+```
+borsa ziraat fiyat THYAO
+  THYAO - Son: 312.50 TL | Tavan: 343.75 | Taban: 281.25 | Degisim: %1.34
+```
+
+### 4.2 Asama 2 - Emir Oncesi Tavan/Taban Kontrolu
+
+adaptor_emir_gonder icinde hisse bilgi sorgusu cagrilir.
+Emir fiyati tavan ustunde veya taban altindaysa emir engellenir, net hata verilir.
+
+```
+HATA: Fiyat tavan ustunde. THYAO tavan: 343.75 TL, girilen: 350.00 TL
+HATA: Fiyat taban altinda. THYAO taban: 281.25 TL, girilen: 250.00 TL
+```
+
+### 4.3 Asama 3 - Alis Gucu ve Lot Kontrolu
+
+JsonGetEquityTradeLimit endpointi cagrilir.
+Alis emirlerinde: emir tutari > alis gucu ise uyari.
+Satis emirlerinde: emir lotu > satilabilir lot ise uyari.
+
+```
+HATA: Yetersiz bakiye. Alis gucu: 5.230 TL, emir tutari: 10.000 TL
+HATA: Yetersiz lot. Satilabilir: 50 lot, girilen: 100 lot
+```
+
+### 4.4 Asama 4 - Sembol Dogrulama
+
+FindEquityOrViopCodeAutoComplete endpointi ile sembol gecerliligi kontrol edilir.
+Gecersiz sembol girildiginde yakin eslesme onerilir.
+
+```
+HATA: 'THYA' sembol bulunamadi. Bunu mu demek istediniz: THYAO
+```
+
+### 4.5 Asama 5 - Canli Fiyat ve Piyasa Durumu
+
+borsa ziraat fiyat komutu genisletilir.
+Birden fazla sembol destegi, watch modu (periyodik yenileme) eklenir.
+Portfoy icerisindeki hisseler icin toplu fiyat sorgulama yapilir.
+
+```
+borsa ziraat fiyat THYAO AKBNK GARAN
+borsa ziraat fiyat THYAO --canli          # Her 5 saniyede guncelle
+borsa ziraat portfoy --detay              # Portfoydeki hisselerin canli fiyatlari
+```
+
+## 5. Dis Bagimliliklar
+
+| Paket | Amac | Zorunlu mu |
+|-------|------|------------|
+| curl | HTTP istekleri | Evet (zaten kullaniliyor) |
+| bc | Ondalikli sayi islemleri | Evet (zaten kullaniliyor) |
+| jq | JSON parse | Hayir (yoksa grep/sed fallback) |
+| grep -P | Perl regex (PCRE) | Evet (zaten kullaniliyor) |
+
+## 6. Guvenlik
+
+Kullanici bilgileri (musteri no, sifre) repoya konmaz.
+Oturum cerezi /tmp/borsa/ziraat/<musteri_no>/cookies.txt icinde tutulur.
+/tmp dizini reboot ile temizlenir, ek onlem gerekmez.
+API anahtari veya kalici kimlik bilgisi saklanmaz, her seferinde giris yapilir.
