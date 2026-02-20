@@ -59,12 +59,12 @@ Borsalarin hepsinin API'si yok. Her adapter kendi baglanti yontemini bilir, yone
 |-------|-----------|-----------------|
 | Binance | Acik REST API | curl + jq + openssl (HMAC imza) |
 | OKX | Acik REST API | curl + jq + openssl (HMAC imza) |
-| Ziraat | API yok | Python + Selenium (web otomasyon) |
-| Osmanli | API yok | Python + Selenium (web otomasyon) |
-| Akbank | API yok | Python + Selenium (web otomasyon) |
-| Is Bankasi | API yok | Python + Selenium (web otomasyon) |
+| Ziraat | API yok | Bash + Curl (Reverse Engineering) |
+| Osmanli | API yok | Bash + Curl (Reverse Engineering) |
+| Akbank | API yok | Bash + Curl (Reverse Engineering) |
+| Is Bankasi | API yok | Bash + Curl (Reverse Engineering) |
 
-API olan borsalarda adapter dogrudan curl ile istek atar. API olmayan borsalarda adapter bir Python scripti calistirip ciktisini okur. Her iki durumda da fonksiyon ayni formatta sonuc dondurur.
+API olan borsalarda adapter API dokumantasyonuna gore calisir. API olmayanlarda ise web trafigi taklit edilerek (reverse engineering) curl ile islem yapilir. HTML parse icin grep/sed/pup, JSON icin jq kullanilir.
 
 ### 3.3 Ornek Akis
 
