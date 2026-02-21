@@ -1,5 +1,10 @@
-"""Bash komutlarini calistirmak icin ortak yardimci fonksiyonlar."""
+"""Bash komutlarini calistirmak icin ortak yardimci fonksiyonlar.
 
+Guvenlik: MCP uzerinden giris/parola/sifre iceren komutlar
+engellenmistir. Kullanici girisini terminalde yapmalidir.
+"""
+
+import re
 import subprocess
 import os
 from pathlib import Path
@@ -12,11 +17,23 @@ BASHRC_DIZINI = _DOSYA_DIZINI.parent
 BORSA_DIZINI = BASHRC_DIZINI / "borsa"
 
 
+# Giris/parola/sifre iceren komutlari engelleyen desen.
+# Buyuk/kucuk harf duyarsiz, Turkce karakterli ve karaktersiz varyantlar.
+_YASAKLI_DESEN = re.compile(
+    r"\b(giris|giriş|parola|sifre|şifre|password|login|passwd)\b",
+    re.IGNORECASE,
+)
+
+
 def bash_calistir(komut: str, zaman_asimi: int = 30) -> str:
     """Bash komutunu calistirip ciktisini dondurur.
 
     Tum bashrc.d kaynaklarini yukleyerek komutu calistirir.
     Boylece borsa, zamanlayici, yazdir gibi fonksiyonlar erisilebilir.
+
+    Guvenlik: Giris, parola veya sifre iceren komutlar
+    otomatik olarak reddedilir. Kullanici girisi sadece
+    terminalden yapilmalidir.
 
     Args:
         komut: Calistirilacak bash komutu.
@@ -24,7 +41,18 @@ def bash_calistir(komut: str, zaman_asimi: int = 30) -> str:
 
     Returns:
         Komutun stdout + stderr ciktisi.
+
+    Raises:
+        Guvenlik ihlali durumunda hata mesaji dondurur (istisna atmaz).
     """
+    # Guvenlik kontrolu: giris/parola/sifre iceren komutlari reddet
+    if _YASAKLI_DESEN.search(komut):
+        return (
+            "GUVENLIK HATASI: MCP uzerinden giris/parola/sifre islemleri "
+            "yapilamaz. Kullanici girisini terminalde yapin: "
+            "borsa <kurum> giris"
+        )
+
     # Tum bashrc.d dosyalarini sirali yukle, sonra komutu calistir
     kaynak_komutlari = _kaynak_satirlari_olustur()
     tam_komut = f"{kaynak_komutlari}\n{komut}"

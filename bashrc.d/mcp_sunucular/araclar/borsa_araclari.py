@@ -1,9 +1,12 @@
-"""Borsa islem araclari (giris, bakiye, portfoy, emir, halka arz).
+"""Borsa islem araclari (bakiye, portfoy, emir, halka arz).
 
 Bu araclar araci kurum adaptorlerini (ornegin Ziraat Yatirim)
-kullanan islemleri yapay zekaya acar. Giris, bakiye sorgulama,
+kullanan islemleri yapay zekaya acar. Bakiye sorgulama,
 portfoy goruntuleme, emir gonderme/listeleme/iptal ve halka arz
 islemlerini kapsar.
+
+GUVENLIK: Giris/parola/sifre islemleri MCP uzerinden yapilamaz.
+Kullanici girisini terminalde yapmalidir: borsa <kurum> giris
 
 UYARI: Emir gonderme ve halka arz talep gibi islemler gercek
 para ile gercek islem yapar. Yapay zekanin bu araclari kullanmadan
@@ -39,7 +42,7 @@ def borsa_araclarini_kaydet(sunucu: FastMCP) -> None:
         """Belirtilen araci kurumdaki hesabin bakiye bilgisini getirir.
 
         Nakit bakiye, hisse senedi degeri ve toplam varlik bilgisini gosterir.
-        Once giris yapilmis olmasi (borsa_giris) gerekir.
+        Once terminalde giris yapilmis olmasi gerekir.
 
         Args:
             kurum: Araci kurum adi (ornek: "ziraat"). Varsayilan: ziraat.
