@@ -6,7 +6,9 @@ Kural 2 = Bu repoda kesinlikle emoji kullanılmayacak. Hiçbir dosyada, hiçbir 
 
 Kural 3 = Tüm yazılan shell kodları shellcheck ile hata vermeden geçecek şekilde yazılacak. Değişkenler çift tırnak içinde kullanılacak, local ve atama ayrı satırlarda yapılacak, her dosyanın başında "# shellcheck shell=bash" direktifi bulunacak.
 
-Kural 4 = Plan ve dokümantasyon için yazılan md dosyaları aşağıdaki şablon ve kurallara uyacak. Başlıklar kafaya göre dallandırılmayacak, aşağıdaki sabit yapıya uyulacak.
+Kural 4 = Tüm yazılan Python kodları ruff ile hata vermeden geçecek şekilde yazılacak. Ruff hem linter hem formatter olarak kullanılacak. Kodlar ruff check ve ruff format kontrolünden temiz geçmeden tamamlanmış sayılmayacak. Temel beklentiler şunlardır: kullanılmayan import olmayacak (F401), kullanılmayan değişken olmayacak (F841), satır uzunluğu 88 karakteri geçmeyecek (E501), import sıralaması isort kurallarına uyacak (I), docstring'ler convention="google" formatında yazılacak (D), f-string gereksiz yere kullanılmayacak, tip annotasyonları mümkün olan her yerde eklenecek. Ruff ayarları repodaki pyproject.toml veya ruff.toml dosyasında merkezi olarak tanımlanacak, her dosyada ayrı ayrı noqa ile susturma yapılmayacak (zorunlu istisnalar hariç).
+
+Kural 5 = Plan ve dokümantasyon için yazılan md dosyaları aşağıdaki şablon ve kurallara uyacak. Başlıklar kafaya göre dallandırılmayacak, aşağıdaki sabit yapıya uyulacak.
 
 Plan MD Şablonu:
 - Başlıklar kafaya göre dallandırılmayacak, aşağıdaki sabit yapıya uyulacak.

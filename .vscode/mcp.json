@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "dotfiles-araclari": {
+      "command": "/home/yasar/dotfiles/.venv/bin/python",
+      "args": [
+        "${workspaceFolder}/bashrc.d/mcp_sunucular/sunucu.py"
+      ],
+      "type": "stdio"
+    }
+  }
+}

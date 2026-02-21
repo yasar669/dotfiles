@@ -1,0 +1,15 @@
+[project]
+name = "dotfiles-mcp-sunucu"
+version = "1.0.0"
+description = "Dotfiles bash araclarini yapay zekaya acan MCP sunucusu"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+where = ["."]
