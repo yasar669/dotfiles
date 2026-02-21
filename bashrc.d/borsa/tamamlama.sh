@@ -25,7 +25,6 @@ _borsa_tamamla() {
                     [[ ! -f "$surucu" ]] && continue
                     local ad
                     ad=$(basename "$surucu" .sh)
-                    [[ "$ad" == "sablon" ]] && continue
                     [[ "$ad" == *.ayarlar ]] && continue
                     kurumlar="$kurumlar $ad"
                 done
@@ -41,7 +40,7 @@ _borsa_tamamla() {
                 COMPREPLY=($(compgen -W "seans fiyat pazar takas adim tavan taban" -- "$su_anki"))
             else
                 # shellcheck disable=SC2207
-                COMPREPLY=($(compgen -W "giris bakiye portfoy emir emirler iptal hesap hesaplar" -- "$su_anki"))
+                COMPREPLY=($(compgen -W "giris bakiye portfoy emir emirler iptal hesap hesaplar arz" -- "$su_anki"))
             fi
             ;;
         3)
@@ -54,6 +53,11 @@ _borsa_tamamla() {
                 giris)
                     # 3. pozisyon: musteri_no — tamamlama yok
                     ;;
+                arz)
+                    # 3. pozisyon: alt komut
+                    # shellcheck disable=SC2207
+                    COMPREPLY=($(compgen -W "liste talepler talep iptal guncelle" -- "$su_anki"))
+                    ;;
             esac
             ;;
         4)
@@ -62,6 +66,17 @@ _borsa_tamamla() {
             if [[ "$komut" == "emir" ]]; then
                 # shellcheck disable=SC2207
                 COMPREPLY=($(compgen -W "alis satis" -- "$su_anki"))
+            fi
+            ;;
+        5)
+            # borsa <kurum> emir <SEMBOL> <alis|satis> <TAB> -> lot (kullanici yazar)
+            ;;
+        6)
+            # borsa <kurum> emir <SEMBOL> <alis|satis> <LOT> <TAB> -> fiyat veya piyasa
+            local komut="${COMP_WORDS[2]}"
+            if [[ "$komut" == "emir" ]]; then
+                # shellcheck disable=SC2207
+                COMPREPLY=($(compgen -W "piyasa" -- "$su_anki"))
             fi
             ;;
         7)

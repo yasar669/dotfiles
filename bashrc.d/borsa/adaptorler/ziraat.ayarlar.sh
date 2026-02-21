@@ -52,6 +52,15 @@ _ZIRAAT_ID_HISSE="eq-total-amount"
 # ASCII eslemesi icin son harften once kesiyoruz.
 _ZIRAAT_METIN_TOPLAM="Toplam Varl"
 
+# Portfoy detay: Hisse tablosu HTML secicileri
+# Her hisse bir <tr id="wdg_portfolio_HESAP_ID"> icerisinde.
+# Alt alanlar: balance (lot), last (son fiyat), marketvalue, cost, profit, profit_change
+_ZIRAAT_SEL_PORTFOY_SATIR='id="wdg_portfolio_[^"]*-FIN"'
+_ZIRAAT_SEL_PORTFOY_HESAP_ID='id="wdg_portfolio_\K[0-9][^"]*-FIN'
+# Hisse toplam degerleri (ozet satiri ustu)
+_ZIRAAT_ID_HISSE_MALIYET="eq-total-cost"
+_ZIRAAT_ID_HISSE_KAR="eq-total-profit"
+
 # =======================================================
 # BOLUM 3: EMIR ALANLARI (AddOrder Formu)
 # =======================================================
@@ -70,8 +79,16 @@ _ZIRAAT_EMIR_KIE="3"
 # SpecialOrderType: Normal limit emir
 _ZIRAAT_EMIR_NORMAL="Normal"
 
-# AmountType: LOT bazli emir
+# AmountType (EquityOrderType): Emir turu
+# Ziraat AJAX endpoint'inden (JsonGetEQEquityOrderTypeDropbox) alinan degerler:
+#   LOT = Limit Fiyatli   (TimeInForce: 0=Gunluk, 3=KIE)
+#   MKT = Piyasa           (TimeInForce: 3=KIE tek secenek)
+#   MTL = Piyasadan Limite (TimeInForce: 0=Gunluk, 3=KIE)
+#   IO  = Denge Emri       (TimeInForce: 3=KIE tek secenek)
+#   MPM = Orta Nokta Piyasa (TimeInForce: 0=Gunluk tek secenek)
+#   MPL = Orta Nokta Limit  (TimeInForce: 0=Gunluk tek secenek)
 _ZIRAAT_EMIR_BIRIM="LOT"
+_ZIRAAT_EMIR_BIRIM_PIYASA="MKT"
 
 # WizardPageName: Emir formu uc adimlidir.
 # Adim 1: GET sayfasindan WizardPageName=LayoutWizardSecondPage alinir.
@@ -118,3 +135,45 @@ _ZIRAAT_SEL_HESAP_ID='id="ddlActiveAccount"[^>]*><option[^>]*value="\K[^"]+'
 _ZIRAAT_KALIP_EMIR_BASARILI='kaydedilmi\|iletilmi\|Emiriniz.*kayded'
 _ZIRAAT_KALIP_EMIR_HATALI='isSuccess.*false\|Hata\|gecersiz\|insufficient\|Yetersiz'
 _ZIRAAT_SEL_REFERANS_NO='referans\u0131yla\|referansiyla\|referans[^<]*\K[A-Z0-9]+'
+
+# =======================================================
+# BOLUM 5: HALKA ARZ (IPO) AYARLARI
+# =======================================================
+
+# IPO Sayfa URL'leri
+_ZIRAAT_IPO_LISTE_URL="${_ZIRAAT_BASE_URL}/sanalsube/tr/IPO/ListIPO"
+_ZIRAAT_IPO_DETAY_URL="${_ZIRAAT_BASE_URL}/sanalsube/tr/IPO/DetailIPO"
+_ZIRAAT_IPO_ISLEMLER_URL="${_ZIRAAT_BASE_URL}/sanalsube/tr/IPO/IPOTransactionsList"
+
+# IPO AJAX Endpoint'leri
+_ZIRAAT_IPO_DETAY_JSON_URL="${_ZIRAAT_BASE_URL}/sanalsube/tr/Ipo/JsonListIpoDetail"
+_ZIRAAT_IPO_IPTAL_URL="${_ZIRAAT_BASE_URL}/sanalsube/tr/Ipo/JsonCancelIpoDemand"
+_ZIRAAT_IPO_GUNCELLE_URL="${_ZIRAAT_BASE_URL}/sanalsube/tr/Ipo/JsonEditIpoDemand"
+_ZIRAAT_IPO_GORUNTULE_URL="${_ZIRAAT_BASE_URL}/sanalsube/tr/Ipo/JsonDisplayOrEditIpoDemandEdit"
+
+# IPO Liste sayfasi HTML secicileri
+# form-detail-ipo: Talep girisi formu. Hidden alanlara IpoId, PaymentTypeId vb doldurup POST edilir.
+_ZIRAAT_IPO_SEL_FORM_ID="form-detail-ipo"
+
+# Aktif halka arz satirlari: btnsubmit data attribute'lerinden cikarilir.
+# data-ipoid: Halka arzin benzersiz ID'si
+# data-name: Halka arzin adi
+# data-fininstid: Mali kurum ID'si (taksit wrapper satirini bulmak icin)
+_ZIRAAT_IPO_SEL_IPOID='data-ipoid="\K[^"]+'
+_ZIRAAT_IPO_SEL_ADI='data-name="\K[^"]+'
+_ZIRAAT_IPO_SEL_FININSTID='data-fininstid="\K[^"]+'
+
+# IPO limit bilgisi
+_ZIRAAT_IPO_SEL_LIMIT='Halka Arz.{1,30}[Ll]imit[^<]*<[^>]*><b[^>]*>\K[0-9.,]+'
+
+# IPO InvestorTypeId: Bireysel yatirimci varsayilani
+_ZIRAAT_IPO_YATIRIMCI_TIPI="0000-000002-INT"
+
+# IPO islem listesi tablo satir secicileri
+# Tablo sutunlari: Halka Arz, Tarih, Sira No, Talep Lot/Nominal, Fiyat, Tutar, Durum
+_ZIRAAT_IPO_SEL_TALEP_SATIR='<tr[^>]*id="[^"]*"[^>]*>'
+
+# IPO talep tipleri
+# M = Miktar bazli (lot), T = Tutar bazli (TL)
+_ZIRAAT_IPO_TALEP_MIKTAR="M"
+_ZIRAAT_IPO_TALEP_TUTAR="T"

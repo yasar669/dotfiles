@@ -195,11 +195,7 @@ _ziraat_sms_dogrula() {
     if [[ -z "$sms_token_val" ]]; then
         _ziraat_log "UYARI: SMS sayfasinda yeni token bulunamadi, eski kullaniliyor."
         sms_token_val="$onceki_token"
-    else
-        _ziraat_log "SMS token: ${sms_token_val:0:10}..."
     fi
-
-    _ziraat_log "SMS kodu gonderiliyor..."
     local cookie_dosyasi
     cookie_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_COOKIE")
     local sms_sonuc
@@ -317,7 +313,6 @@ adaptor_giris() {
 
     # Mevcut oturum gecerli mi kontrol et — gecerliyse SMS'e gerek yok
     if adaptor_oturum_gecerli_mi "$musteri_no"; then
-        _ziraat_log "Oturum zaten acik (Musteri: $musteri_no). Tekrar giris gereksiz."
         echo ""
         echo "========================================="
         echo " OTURUM ZATEN ACIK"
@@ -374,23 +369,25 @@ adaptor_giris() {
     fi
 }
 
-adaptor_bakiye() {
+# _ziraat_portfoy_sayfasi_cek
+# Ortak yardimci: Oturum + portfoy sayfasi HTTP istegini yapar.
+# Hem adaptor_bakiye hem adaptor_portfoy bu fonksiyonu kullanir.
+# Basariliysa portfoy HTML'ini _ziraat_portfoy_html degiskenine yazar.
+# Donus: 0 = basarili (HTML _ziraat_portfoy_html'de), 1 = hata (mesaj yazildi)
+_ziraat_portfoy_sayfasi_cek() {
     if ! _ziraat_aktif_hesap_kontrol; then
         return 1
     fi
 
     local cookie_dosyasi
     cookie_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_COOKIE")
-    local debug_dosyasi
-    debug_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_DEBUG")
 
     if [[ ! -f "$cookie_dosyasi" ]]; then
         echo "HATA: Oturum bulunamadi. Once giris yapin: borsa ziraat giris ..."
         return 1
     fi
 
-    _ziraat_log "Portfoy bilgisi sorgulanıyor..."
-
+    # Ana sayfaya git (session guid kontrolu + cookie yenileme)
     local ana_yanit
     ana_yanit=$(cekirdek_istek_at \
         -c "$cookie_dosyasi" \
@@ -400,7 +397,7 @@ adaptor_bakiye() {
     local session_guid
     session_guid=$(echo "$ana_yanit" | grep -oP "$_ZIRAAT_SEL_SESSION_GUID")
 
-    # Oturum sonlanma tespiti: session_guid yoksa ve login formu varsa oturum dolmuştur
+    # Oturum sonlanma tespiti
     if [[ -z "$session_guid" ]]; then
         if echo "$ana_yanit" | grep -qP "$_ZIRAAT_SEL_CSRF_TOKEN"; then
             _ziraat_log "OTURUM SONLANDI: Sunucu giris sayfasina yonlendirdi."
@@ -413,12 +410,9 @@ adaptor_bakiye() {
             return 1
         fi
         _ziraat_log "UYARI: Session GUID bulunamadi ancak login formu yok. Devam ediliyor."
-    else
-        _ziraat_log "Session GUID: $session_guid"
     fi
 
-    _ziraat_log "Portfoy sayfasi isteniyor: $_ZIRAAT_PORTFOY_URL"
-
+    # Portfoy sayfasini cek
     local ham_yanit
     ham_yanit=$(cekirdek_istek_at \
         -w "\nHTTP_CODE:%{http_code}" \
@@ -429,12 +423,32 @@ adaptor_bakiye() {
 
     local http_kodu
     http_kodu=$(echo "$ham_yanit" | grep -oP 'HTTP_CODE:\K[0-9]+' | tail -n 1)
-    local portfoy_yaniti
-    portfoy_yaniti="${ham_yanit//HTTP_CODE:${http_kodu}/}"
+    _ziraat_portfoy_html="${ham_yanit//HTTP_CODE:${http_kodu}/}"
+    _ziraat_portfoy_http_kodu="$http_kodu"
 
-    _ziraat_log "HTTP Yanit Kodu: $http_kodu"
+    if [[ "$http_kodu" != "200" ]]; then
+        local debug_dosyasi
+        debug_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_DEBUG")
+        _ziraat_log "HATA: Portfoy sayfasi alinamadi (Kod: $http_kodu)."
+        echo "HATA: Portfoy sayfasi alinamadi (HTTP $http_kodu)."
+        echo "$_ziraat_portfoy_html" > "$debug_dosyasi"
+        return 1
+    fi
 
-    if [[ "$http_kodu" == "200" ]] && echo "$portfoy_yaniti" | grep -q 'Toplam'; then
+    return 0
+}
+
+adaptor_bakiye() {
+    if ! _ziraat_portfoy_sayfasi_cek; then
+        return 1
+    fi
+
+    local portfoy_yaniti="$_ziraat_portfoy_html"
+    local http_kodu="$_ziraat_portfoy_http_kodu"
+    local debug_dosyasi
+    debug_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_DEBUG")
+
+    if echo "$portfoy_yaniti" | grep -q 'Toplam'; then
         local nakit hisse toplam
         nakit=$(echo "$portfoy_yaniti" | grep -oP "id=\"${_ZIRAAT_ID_NAKIT}\"[^>]*>\K[^<]+" | tr -d ' \n\t')
         hisse=$(echo "$portfoy_yaniti" | grep -oP "id=\"${_ZIRAAT_ID_HISSE}\"[^>]*>\K[^<]+" | tr -d ' \n\t')
@@ -450,7 +464,6 @@ adaptor_bakiye() {
         fi
 
         cekirdek_yazdir_portfoy "$ADAPTOR_ADI" "$nakit" "$hisse" "$toplam"
-        _ziraat_log "Bakiye sorgusu basarili: Toplam $toplam TL"
     else
         _ziraat_log "HATA: Portfoy sayfasi beklenen formatta degil (Kod: $http_kodu)."
         echo "UYARI: Portfoy sayfasi beklenen formatta degil (Kod: $http_kodu)."
@@ -458,6 +471,114 @@ adaptor_bakiye() {
         echo "$portfoy_yaniti" > "$debug_dosyasi"
         return 1
     fi
+}
+
+adaptor_portfoy() {
+    # Portfoydeki hisse senetlerini detayli listeler.
+    # Her hisse icin: sembol, lot, son fiyat, piyasa degeri, maliyet, kar/zarar, kar %
+    # HTML yapisi: <tr id="wdg_portfolio_HESAP_ID"> icerisinde:
+    #   1. <td> Sembol (ilk td)
+    #   2. <span id="wdg_portfolio_balance_*"> Lot
+    #   3. <span id="wdg_portfolio_last_*"> Son fiyat
+    #   4. <td id="wdg_portfolio_marketvalue_*"> Piyasa degeri
+    #   5. <td id="wdg_portfolio_cost_*"> Maliyet
+    #   6. <span id="profit_total"> Kar/Zarar
+    #   7. <span id="profit_change"> Kar %
+
+    if ! _ziraat_portfoy_sayfasi_cek; then
+        return 1
+    fi
+
+    local portfoy_yaniti="$_ziraat_portfoy_html"
+
+    # Nakit ve toplam degerleri cek
+    local nakit hisse_toplam toplam
+    nakit=$(echo "$portfoy_yaniti" | grep -oP "id=\"${_ZIRAAT_ID_NAKIT}\"[^>]*>\K[^<]+" | tr -d ' \n\t')
+    hisse_toplam=$(echo "$portfoy_yaniti" | grep -oP "id=\"${_ZIRAAT_ID_HISSE}\"[^>]*>\K[^<]+" | tr -d ' \n\t')
+    toplam=$(echo "$portfoy_yaniti" | grep -A 10 "$_ZIRAAT_METIN_TOPLAM" | grep -oP '[0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2}' | head -n 1 | tr -d ' \n\t')
+
+    # Hisse satir ID'lerini bul
+    local hesap_idler
+    hesap_idler=$(grep -oP "$_ZIRAAT_SEL_PORTFOY_HESAP_ID" <<< "$portfoy_yaniti")
+
+    if [[ -z "$hesap_idler" ]]; then
+        echo ""
+        echo "========================================="
+        echo " Portfoyde hisse senedi bulunamadi."
+        echo " Nakit Bakiye: ${nakit:-0.00} TL"
+        echo "========================================="
+        echo ""
+        return 0
+    fi
+
+    # HTML'i satir-bazli parse icin hazirla (newline gerektigi icin sed zorunlu)
+    local temiz_html
+    # shellcheck disable=SC2001
+    temiz_html=$(sed 's/></>\n</g' <<< "$portfoy_yaniti")
+
+    # Her hisse icin veri cikar
+    # Strateji: Her hisse icin <tr>...</tr> blogunu bir kez cikar, tum alanlari ondan parse et.
+    # Boylece ayri ayri grep/sed cagrilari azalir ve desen carpismasi onlenir.
+    local satirlar=""
+    local hesap_id
+    while IFS= read -r hesap_id; do
+        [[ -z "$hesap_id" ]] && continue
+
+        # TR blogunu cikar: <tr id="wdg_portfolio_HESAP_ID">...</tr>
+        local tr_blok
+        tr_blok=$(sed -n "/wdg_portfolio_${hesap_id}\"/,/<\/tr/p" <<< "$temiz_html")
+
+        # Sembol: ilk <td> icindeki metin
+        local sembol
+        sembol=$(grep -A1 '<td' <<< "$tr_blok" | head -2 | tail -1 | tr -d ' \t\n\r')
+
+        # Lot: <span id="wdg_portfolio_balance_*"> sonraki satir
+        local lot
+        lot=$(grep -A1 "wdg_portfolio_balance_" <<< "$tr_blok" | tail -1 | tr -d ' \t\n\r')
+
+        # Son fiyat: <span id="wdg_portfolio_last_*"> sonraki satir
+        local son_fiyat
+        son_fiyat=$(grep -A1 "wdg_portfolio_last_" <<< "$tr_blok" | tail -1 | tr -d ' \t\n\r')
+
+        # Piyasa degeri: <td id="wdg_portfolio_marketvalue_*"> sonraki satir
+        local piy_degeri
+        piy_degeri=$(grep -A1 "wdg_portfolio_marketvalue_" <<< "$tr_blok" | tail -1 | tr -d ' \t\n\r')
+
+        # Maliyet: <td id="wdg_portfolio_cost_*"> sonraki satir
+        local maliyet
+        maliyet=$(grep -A1 "wdg_portfolio_cost_" <<< "$tr_blok" | tail -1 | tr -d ' \t\n\r')
+
+        # Kar/Zarar: <span id="profit_total"> icindeki sayi
+        local kar_zarar
+        kar_zarar=$(grep -oP '(?<=>)-?[0-9,.]+(?=</span)' <<< "$tr_blok" | head -1)
+
+        # Kar yuzde: <span id="profit_change"> icindeki %-X,X
+        local kar_yuzde
+        kar_yuzde=$(tr -d '\n' <<< "$tr_blok" | grep -oP '%-?[0-9,.]+')
+
+        if [[ -n "$sembol" ]]; then
+            # Tab karakteri ile ayir (literal tab, echo -e gerekmez)
+            printf -v satir_fmt "%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+                "$sembol" "$lot" "$son_fiyat" "$piy_degeri" "$maliyet" "$kar_zarar" "$kar_yuzde"
+            if [[ -n "$satirlar" ]]; then
+                satirlar+=$'\n'"$satir_fmt"
+            else
+                satirlar="$satir_fmt"
+            fi
+        fi
+    done <<< "$hesap_idler"
+
+    if [[ -z "$satirlar" ]]; then
+        echo ""
+        echo "========================================="
+        echo " Portfoyde hisse senedi bulunamadi."
+        echo " Nakit Bakiye: ${nakit:-0.00} TL"
+        echo "========================================="
+        echo ""
+        return 0
+    fi
+
+    cekirdek_yazdir_portfoy_detay "$ADAPTOR_ADI" "$nakit" "$hisse_toplam" "$toplam" "$satirlar"
 }
 
 adaptor_emirleri_listele() {
@@ -759,17 +880,32 @@ adaptor_emir_gonder() {
     local sembol="$1"          # Ornek: THYAO, AKBNK
     local islem="$2"           # alis | satis
     local lot="$3"             # Lot adedi
-    local fiyat="$4"           # Limit fiyat (zorunlu)
+    local fiyat="$4"           # Limit fiyat veya "piyasa"
     local bildirim_turu="$5"   # Bildirim turu (opsiyonel): mobil | eposta | hepsi | yok
 
     # --- Parametre Kontrolu ---
     if [[ -z "$sembol" || -z "$islem" || -z "$lot" || -z "$fiyat" ]]; then
-        echo "Kullanim: $ADAPTOR_ADI emir SEMBOL alis|satis LOT FIYAT [mobil|eposta|hepsi|yok]"
+        echo "Kullanim: $ADAPTOR_ADI emir SEMBOL alis|satis LOT FIYAT|piyasa [mobil|eposta|hepsi|yok]"
         return 1
     fi
 
     # Sembol buyuk harf
     sembol="${sembol^^}"
+
+    # --- Emir turu tespiti: piyasa vs limit ---
+    local emir_birim
+    local emir_sure
+    local piyasa_mi=0
+
+    if [[ "${fiyat,,}" == "piyasa" ]]; then
+        piyasa_mi=1
+        emir_birim="$_ZIRAAT_EMIR_BIRIM_PIYASA"  # MKT
+        emir_sure="$_ZIRAAT_EMIR_KIE"             # 3 (tek secenek)
+        fiyat="0"
+    else
+        emir_birim="$_ZIRAAT_EMIR_BIRIM"          # LOT
+        emir_sure="$_ZIRAAT_EMIR_GUNLUK"          # 0 (Gunluk)
+    fi
 
     # Islem turu
     local islem_kodu
@@ -795,28 +931,40 @@ adaptor_emir_gonder() {
             ;;
     esac
 
-    # Lot ve fiyat sayisal mi?
+    # Lot sayisal mi?
     if ! cekirdek_sayi_dogrula "$lot" "Lot" "$ADAPTOR_ADI"; then
         return 1
     fi
-    if ! cekirdek_sayi_dogrula "$fiyat" "Fiyat" "$ADAPTOR_ADI"; then
-        return 1
-    fi
 
-    # Ziraat seans disi minimum tutar kontrolu (BIST uyarisindan once yapilir,
-    # aksi halde "emir islenecek" uyarisi gosterilip ardindan engellenir)
-    if ! _ziraat_seans_disi_tutar_kontrol "$lot" "$fiyat"; then
-        return 1
-    fi
+    # Limit emirlerde fiyat, seans disi tutar ve BIST adim kontrolu yapilir.
+    # Piyasa emirlerinde fiyat sunucu tarafindan belirlendigi icin atlanir.
+    if [[ "$piyasa_mi" -eq 0 ]]; then
+        if ! cekirdek_sayi_dogrula "$fiyat" "Fiyat" "$ADAPTOR_ADI"; then
+            return 1
+        fi
 
-    # BIST fiyat adimi dogrulamasi
-    if ! bist_emir_dogrula "$fiyat"; then
-        return 1
+        # Ziraat seans disi minimum tutar kontrolu (BIST uyarisindan once yapilir,
+        # aksi halde "emir islenecek" uyarisi gosterilip ardindan engellenir)
+        if ! _ziraat_seans_disi_tutar_kontrol "$lot" "$fiyat"; then
+            return 1
+        fi
+
+        # BIST fiyat adimi dogrulamasi
+        if ! bist_emir_dogrula "$fiyat"; then
+            return 1
+        fi
     fi
 
     # Kuru calistirma modu (KURU_CALISTIR=1 ile aktif edilir)
+    local fiyat_gosterim
+    if [[ "$piyasa_mi" -eq 1 ]]; then
+        fiyat_gosterim="PIYASA"
+    else
+        fiyat_gosterim="$fiyat TL"
+    fi
+
     if [[ "${KURU_CALISTIR:-0}" == "1" ]]; then
-        _ziraat_log "KURU CALISTIR: $islem $lot lot $sembol @ $fiyat TL (emir GONDERILMEDI)"
+        _ziraat_log "KURU CALISTIR: $islem $lot lot $sembol @ $fiyat_gosterim (emir GONDERILMEDI)"
         echo ""
         echo "========================================="
         echo " [KURU CALISTIR] EMIR BILGISI"
@@ -824,7 +972,8 @@ adaptor_emir_gonder() {
         echo " Sembol : $sembol"
         echo " Islem  : $islem ($islem_kodu)"
         echo " Lot    : $lot"
-        echo " Fiyat  : $fiyat TL"
+        echo " Fiyat  : $fiyat_gosterim"
+        echo " Tur    : $emir_birim"
         echo " Durum  : GONDERILMEDI"
         echo "========================================="
         echo ""
@@ -839,7 +988,7 @@ adaptor_emir_gonder() {
     local emir_yanit_dosyasi
     emir_yanit_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_EMIR_YANIT")
 
-    _ziraat_log "Emir formu hazirlaniyor: $sembol $islem $lot lot @ $fiyat TL..."
+    _ziraat_log "Emir formu hazirlaniyor: $sembol $islem $lot lot @ $fiyat_gosterim..."
 
     local emir_sayfasi
     emir_sayfasi=$(cekirdek_istek_at \
@@ -867,8 +1016,6 @@ adaptor_emir_gonder() {
     hostname_val=$(echo "$emir_sayfasi" | grep -oP "$_ZIRAAT_SEL_HOSTNAME")
     [[ -z "$hostname_val" ]] && hostname_val="$_ZIRAAT_FALLBACK_HOSTNAME"
 
-    _ziraat_log "Hesap: $hesap_id | Token: ${emir_csrf:0:10}..."
-
     # GET sayfasindaki WizardPageName hidden degerini parse et.
     # Sunucu GET'te bu alani LayoutWizardSecondPage olarak render eder,
     # yani tek POST ile dogrudan onay adimina gidilir.
@@ -882,7 +1029,7 @@ adaptor_emir_gonder() {
         _ziraat_log "WizardPageName: $wizard_adim"
     fi
 
-    _ziraat_log "Emir gonderiliyor: $islem $lot lot $sembol @ $fiyat TL"
+    _ziraat_log "Emir gonderiliyor: $islem $lot lot $sembol @ $fiyat_gosterim"
     
 
     # Tarih alanlari (HTML hidden input formatina gore: DD.MM.YYYY)
@@ -910,8 +1057,8 @@ adaptor_emir_gonder() {
         --data-urlencode "Unit=$lot" \
         --data-urlencode "Price=$fiyat" \
         --data-urlencode "PriceEquity=$fiyat" \
-        --data-urlencode "AmountType=$_ZIRAAT_EMIR_BIRIM" \
-        --data-urlencode "TimeInForce=$_ZIRAAT_EMIR_GUNLUK" \
+        --data-urlencode "AmountType=$emir_birim" \
+        --data-urlencode "TimeInForce=$emir_sure" \
         --data-urlencode "SpecialOrderType=$_ZIRAAT_EMIR_NORMAL" \
         --data-urlencode "WizardPageName=$wizard_adim" \
         --data-urlencode "button=NextButton" \
@@ -948,7 +1095,8 @@ adaptor_emir_gonder() {
         echo " Sembol : $sembol"
         echo " Islem  : $islem"
         echo " Lot    : $lot"
-        echo " Fiyat  : $fiyat TL"
+        echo " Fiyat  : $fiyat_gosterim"
+        echo " Tur    : $emir_birim"
         echo " Durum  : ILETILDI"
         echo "========================================="
         echo ""
@@ -985,8 +1133,8 @@ adaptor_emir_gonder() {
             --data-urlencode "Unit=$lot" \
             --data-urlencode "Price=$fiyat" \
             --data-urlencode "PriceEquity=$fiyat" \
-            --data-urlencode "AmountType=$_ZIRAAT_EMIR_BIRIM" \
-            --data-urlencode "TimeInForce=$_ZIRAAT_EMIR_GUNLUK" \
+            --data-urlencode "AmountType=$emir_birim" \
+            --data-urlencode "TimeInForce=$emir_sure" \
             --data-urlencode "SpecialOrderType=$_ZIRAAT_EMIR_NORMAL" \
             --data-urlencode "WizardPageName=$sonraki_wizard" \
             --data-urlencode "button=FinishButton" \
@@ -1026,7 +1174,8 @@ adaptor_emir_gonder() {
             echo " Sembol    : $sembol"
             echo " Islem     : $islem"
             echo " Lot       : $lot"
-            echo " Fiyat     : $fiyat TL"
+            echo " Fiyat     : $fiyat_gosterim"
+            echo " Tur       : $emir_birim"
             echo " Referans  : ${referans_no:-HTML icin bakin: $emir_yanit_dosyasi}"
             echo " Durum     : ILETILDI"
             echo "========================================="
@@ -1056,6 +1205,785 @@ adaptor_emir_gonder() {
         echo "HATA: Emir reddedildi. Debug icin: $emir_yanit_dosyasi"
     fi
     _ziraat_log "Debug dosyasi: $emir_yanit_dosyasi"
+    return 1
+}
+
+# =======================================================
+# BOLUM 3: HALKA ARZ (IPO) FONKSIYONLARI
+# =======================================================
+
+# -------------------------------------------------------
+# adaptor_halka_arz_liste
+# Aktif halka arzlari ve islem limitini listeler.
+# Kaynak: /sanalsube/tr/IPO/ListIPO sayfasi (HTML parse)
+# -------------------------------------------------------
+adaptor_halka_arz_liste() {
+    _ziraat_aktif_hesap_kontrol || return 1
+
+    local cookie_dosyasi
+    cookie_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_COOKIE")
+
+    _ziraat_log "Halka arz listesi sorgulanıyor..."
+
+    local sayfa
+    sayfa=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        "$_ZIRAAT_IPO_LISTE_URL")
+
+    local sayfa_boyut="${#sayfa}"
+    if [[ "$sayfa_boyut" -lt 500 ]]; then
+        _ziraat_log "HATA: Halka arz sayfasi alinamadi ($sayfa_boyut bayt)."
+        echo "HATA: Halka arz sayfasi alinamadi. Oturum sonlanmis olabilir."
+        return 1
+    fi
+
+    # Login sayfasina yonlendirilme kontrolu
+    if echo "$sayfa" | grep -q 'Account/Login'; then
+        _ziraat_log "HATA: Oturum sonlanmis. Giris yapin."
+        echo "HATA: Oturum sonlanmis. Once giris yapin: borsa ziraat giris"
+        return 1
+    fi
+
+    # Halka arz islem limitini cikar
+    local limit
+    limit=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "$_ZIRAAT_IPO_SEL_LIMIT" | head -1)
+
+    # Aktif halka arzlari parse et
+    # Her arz bir btnsubmit butonunda data-ipoid, data-name attribute'leri ile belirlenir.
+    # Tablo sutunlari: Halka Arz, Basvuru Tipi, Halka Arz Tipi, Hareket Tipi, Odeme Sekli...
+    local satirlar=""
+
+    # Tablo icerigini kontrol et — arz var mi?
+    if echo "$sayfa" | grep -qP 'btnsubmit'; then
+        # HTML'i satirlara bol, btnsubmit butonlarini isle
+        local temiz_html
+        # shellcheck disable=SC2001
+        temiz_html=$(sed 's/></>\n</g' <<< "$sayfa")
+
+        # Her btnsubmit'ten IpoId ve Name cikar
+        local ipo_bloklari
+        ipo_bloklari=$(echo "$temiz_html" | grep -P 'btnsubmit')
+
+        while IFS= read -r blok; do
+            [[ -z "$blok" ]] && continue
+            local ipo_id ipo_adi
+            ipo_id=$(echo "$blok" | grep -oP "$_ZIRAAT_IPO_SEL_IPOID" | head -1)
+            ipo_adi=$(echo "$blok" | grep -oP "$_ZIRAAT_IPO_SEL_ADI" | head -1)
+            [[ -z "$ipo_id" ]] && continue
+
+            # Tablo satirindan tip ve odeme bilgilerini cikar
+            # btnsubmit ayni tablodaki <tr> icerisinde; TR'yi bul
+            local fininstid
+            fininstid=$(echo "$blok" | grep -oP "$_ZIRAAT_IPO_SEL_FININSTID" | head -1)
+
+            # Tablo icerisindeki td'lerden bilgileri cekmeyi dene
+            local arz_tip="" odeme="" durum="AKTIF"
+
+            # Eger tabloda daha detayli parse gerekiyorsa tr blogunu bul
+            if [[ -n "$fininstid" ]]; then
+                local tr_blok
+                tr_blok=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "<tr[^>]*id=\"${fininstid}\"[^>]*>.*?</tr>" | head -1)
+                if [[ -n "$tr_blok" ]]; then
+                    # td'leri cikar (basit sirayla)
+                    local td_listesi
+                    td_listesi=$(echo "$tr_blok" | grep -oP '<td[^>]*>.*?</td>' | sed 's/<[^>]*>//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                    arz_tip=$(echo "$td_listesi" | sed -n '3p')
+                    odeme=$(echo "$td_listesi" | sed -n '5p')
+                fi
+            fi
+
+            local satir="${ipo_adi}\t${arz_tip:-Bilinmiyor}\t${odeme:-Bilinmiyor}\t${durum}\t${ipo_id}"
+            if [[ -z "$satirlar" ]]; then
+                satirlar="$satir"
+            else
+                satirlar="${satirlar}\n${satir}"
+            fi
+        done <<< "$ipo_bloklari"
+    fi
+
+    local cozulmus_satirlar
+    cozulmus_satirlar=$(echo -e "$satirlar")
+
+    cekirdek_yazdir_halka_arz_liste "$ADAPTOR_ADI" "$limit" "$cozulmus_satirlar"
+    _ziraat_log "Halka arz listesi tamamlandi. Limit: ${limit:-bilinmiyor} TL"
+}
+
+# -------------------------------------------------------
+# adaptor_halka_arz_talepler
+# Halka arz taleplerim listesini gosterir.
+# Kaynak: /sanalsube/tr/IPO/IPOTransactionsList sayfasi
+# -------------------------------------------------------
+adaptor_halka_arz_talepler() {
+    _ziraat_aktif_hesap_kontrol || return 1
+
+    local cookie_dosyasi
+    cookie_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_COOKIE")
+
+    _ziraat_log "Halka arz taleplerim sorgulanıyor..."
+
+    # Islem listesi sayfasini cek (POST formu var, tarih parametreleri gerekiyor)
+    local bugun
+    bugun=$(date '+%d.%m.%Y')
+
+    # Once sayfayi GET ile cek — CSRF token ve form bilgisi icin
+    local sayfa
+    sayfa=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        "$_ZIRAAT_IPO_ISLEMLER_URL")
+
+    local sayfa_boyut="${#sayfa}"
+    if [[ "$sayfa_boyut" -lt 500 ]]; then
+        _ziraat_log "HATA: Halka arz islem listesi alinamadi ($sayfa_boyut bayt)."
+        echo "HATA: Sayfa alinamadi. Oturum sonlanmis olabilir."
+        return 1
+    fi
+
+    # Login kontrolu
+    if echo "$sayfa" | grep -q 'Account/Login'; then
+        echo "HATA: Oturum sonlanmis. Once giris yapin: borsa ziraat giris"
+        return 1
+    fi
+
+    local satirlar=""
+
+    # Tablo bos mu kontrol et
+    if echo "$sayfa" | grep -qP 'kayıt bulunamad|bulunmamaktad'; then
+        cekirdek_yazdir_halka_arz_talepler "$ADAPTOR_ADI" ""
+        return 0
+    fi
+
+    # HTML tablosunu parse et
+    # Tablo tek satir gelebilir — <tr'leri ayir
+    local birlesik
+    birlesik=$(echo "$sayfa" | tr '\n' ' ' | sed 's/<tr /\n<tr /g')
+
+    while IFS= read -r blok; do
+        # Sadece veri satirlarini isle (data-id iceren tr'ler)
+        echo "$blok" | grep -qP 'data-id=|data-ipoid=' || continue
+        # Header satirlarini atla
+        echo "$blok" | grep -qP '<th' && continue
+
+        # td iceriklerini cikar
+        local td_listesi
+        td_listesi=$(echo "$blok" | grep -oP '<td[^>]*>.*?</td>' | sed 's/<[^>]*>//g; s/&[^;]*;//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+        local td_sayisi
+        td_sayisi=$(echo "$td_listesi" | wc -l)
+        [[ "$td_sayisi" -lt 5 ]] && continue
+
+        local ad tarih lot fiyat tutar durum
+        ad=$(echo "$td_listesi" | sed -n '1p')
+        tarih=$(echo "$td_listesi" | sed -n '2p')
+        lot=$(echo "$td_listesi" | sed -n '4p')
+        fiyat=$(echo "$td_listesi" | sed -n '5p')
+        tutar=$(echo "$td_listesi" | sed -n '6p')
+        durum=$(echo "$td_listesi" | sed -n '8p')
+
+        # Talep ID'sini cikar (iptal/guncelle icin gerekli)
+        local talep_id
+        talep_id=$(echo "$blok" | grep -oP 'data-id="\K[^"]+' | head -1)
+        [[ -z "$talep_id" ]] && talep_id=$(echo "$blok" | grep -oP 'id="\K[^"]+' | head -1)
+
+        [[ -z "$ad" ]] && continue
+
+        local satir="${ad}\t${tarih}\t${lot}\t${fiyat}\t${tutar}\t${durum}\t${talep_id}"
+        if [[ -z "$satirlar" ]]; then
+            satirlar="$satir"
+        else
+            satirlar="${satirlar}\n${satir}"
+        fi
+    done <<< "$birlesik"
+
+    local cozulmus_satirlar
+    cozulmus_satirlar=$(echo -e "$satirlar")
+
+    cekirdek_yazdir_halka_arz_talepler "$ADAPTOR_ADI" "$cozulmus_satirlar"
+    _ziraat_log "Halka arz talepler listesi tamamlandi."
+}
+
+# -------------------------------------------------------
+# adaptor_halka_arz_talep <ipo_adi_veya_id> <lot>
+# Belirtilen halka arza talep girisi yapar.
+# Akis: ListIPO GET → IpoId bul → DetailIPO POST → Wizard form doldur
+# -------------------------------------------------------
+adaptor_halka_arz_talep() {
+    local ipo_arama="$1"   # Halka arz adi veya ID
+    local lot="$2"         # Talep edilen lot
+
+    if [[ -z "$ipo_arama" || -z "$lot" ]]; then
+        echo "Kullanim: borsa $ADAPTOR_ADI arz talep <IPO_ADI_veya_ID> <LOT>"
+        return 1
+    fi
+
+    if ! cekirdek_sayi_dogrula "$lot" "Lot" "$ADAPTOR_ADI"; then
+        return 1
+    fi
+
+    _ziraat_aktif_hesap_kontrol || return 1
+
+    local cookie_dosyasi
+    cookie_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_COOKIE")
+    local debug_dosyasi
+    debug_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_DEBUG")
+
+    _ziraat_log "Halka arz talebi hazirlaniyor: $ipo_arama, $lot lot..."
+
+    # 1. Liste sayfasindan IpoId ve form bilgilerini al
+    local liste_sayfa
+    liste_sayfa=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        "$_ZIRAAT_IPO_LISTE_URL")
+
+    if [[ "${#liste_sayfa}" -lt 500 ]]; then
+        echo "HATA: Halka arz sayfasi alinamadi. Oturum sonlanmis olabilir."
+        return 1
+    fi
+
+    if echo "$liste_sayfa" | grep -q 'Account/Login'; then
+        echo "HATA: Oturum sonlanmis. Once giris yapin: borsa ziraat giris"
+        return 1
+    fi
+
+    # Aktif arz var mi?
+    if ! echo "$liste_sayfa" | grep -qP 'btnsubmit'; then
+        echo "HATA: Tanimli halka arz bulunmamaktadir."
+        return 1
+    fi
+
+    # IpoId'yi bul — isme gore veya dogrudan ID ile
+    local ipo_id="" ipo_adi=""
+    local temiz_ipo
+    # shellcheck disable=SC2001
+    temiz_ipo=$(sed 's/></>\n</g' <<< "$liste_sayfa")
+    local ipo_butonlari
+    ipo_butonlari=$(echo "$temiz_ipo" | grep -P 'btnsubmit')
+
+    while IFS= read -r buton; do
+        [[ -z "$buton" ]] && continue
+        local gecici_id gecici_adi
+        gecici_id=$(echo "$buton" | grep -oP "$_ZIRAAT_IPO_SEL_IPOID" | head -1)
+        gecici_adi=$(echo "$buton" | grep -oP "$_ZIRAAT_IPO_SEL_ADI" | head -1)
+        [[ -z "$gecici_id" ]] && continue
+
+        # Arama: ID eslesmesi veya isim icinde arama (buyuk/kucuk harf duyarsiz)
+        if [[ "$gecici_id" == "$ipo_arama" ]] || \
+           echo "$gecici_adi" | grep -qi "$ipo_arama"; then
+            ipo_id="$gecici_id"
+            ipo_adi="$gecici_adi"
+            break
+        fi
+    done <<< "$ipo_butonlari"
+
+    if [[ -z "$ipo_id" ]]; then
+        echo "HATA: '$ipo_arama' ile eslesen halka arz bulunamadi."
+        echo "Mevcut halka arzlari gormek icin: borsa $ADAPTOR_ADI arz liste"
+        return 1
+    fi
+
+    _ziraat_log "Halka arz bulundu: $ipo_adi (ID: $ipo_id)"
+
+    # 2. CSRF token — liste sayfasindan al
+    local csrf
+    csrf=$(echo "$liste_sayfa" | grep -oP "$_ZIRAAT_SEL_CSRF_TOKEN" | tail -n 1)
+    if [[ -z "$csrf" ]]; then
+        _ziraat_log "HATA: CSRF token bulunamadi."
+        echo "HATA: CSRF token alinamadi. Oturum sorunu olabilir."
+        return 1
+    fi
+
+    # 3. Yatirimci tipi ve odeme sekli bilgilerini al
+    local yatirimci_tipi="$_ZIRAAT_IPO_YATIRIMCI_TIPI"
+
+    # Odeme tipi: Sayfadaki dropdown'dan ilk secenegi al
+    local odeme_tipi_id=""
+    local odeme_tipi_adi=""
+    local odeme_dd
+    odeme_dd=$(echo "$liste_sayfa" | tr '\n' ' ' | grep -oP "ddlPaymentType_${ipo_id}[^<]*<option[^>]*value=\"\K[^\"]+")
+    if [[ -n "$odeme_dd" ]]; then
+        odeme_tipi_id="$odeme_dd"
+        odeme_tipi_adi=$(echo "$liste_sayfa" | tr '\n' ' ' | grep -oP "ddlPaymentType_${ipo_id}[^<]*<option[^>]*value=\"${odeme_dd}\"[^>]*>\K[^<]+")
+    fi
+
+    # Taksit bilgisi
+    local taksit_id=""
+    local taksit_dd
+    taksit_dd=$(echo "$liste_sayfa" | tr '\n' ' ' | grep -oP "ddlFirstInstallment_${ipo_id}[^<]*<option[^>]*value=\"\K[^\"]+")
+    [[ -n "$taksit_dd" ]] && taksit_id="$taksit_dd"
+
+    _ziraat_log "Odeme: ${odeme_tipi_adi:-varsayilan} | Taksit: ${taksit_id:-yok}"
+
+    # 4. DetailIPO sayfasina POST — talep formunu ac
+    local detay_yanit
+    detay_yanit=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        -H "Referer: $_ZIRAAT_IPO_LISTE_URL" \
+        -H "Origin: $_ZIRAAT_BASE_URL" \
+        --data-urlencode "__RequestVerificationToken=$csrf" \
+        --data-urlencode "IpoId=$ipo_id" \
+        --data-urlencode "PaymentTypeId=$odeme_tipi_id" \
+        --data-urlencode "PaymentTypeName=$odeme_tipi_adi" \
+        --data-urlencode "FirstInstallmentId=$taksit_id" \
+        --data-urlencode "Name=$ipo_adi" \
+        --data-urlencode "InvesterTypeId=$yatirimci_tipi" \
+        --data-urlencode "InvestorTypeList=" \
+        --data-urlencode "isHiglyInvestor=" \
+        "$_ZIRAAT_IPO_DETAY_URL")
+
+    local detay_boyut="${#detay_yanit}"
+    if [[ "$detay_boyut" -lt 500 ]]; then
+        _ziraat_log "HATA: DetailIPO yaniti cok kucuk ($detay_boyut bayt)."
+        echo "HATA: Halka arz detay sayfasi alinamadi."
+        return 1
+    fi
+
+    # Hata kontrolu
+    if echo "$detay_yanit" | grep -qiP 'validation-summary-errors'; then
+        local hata_metni
+        hata_metni=$(_ziraat_html_hata_cikar "$detay_yanit")
+        if [[ -n "$hata_metni" ]]; then
+            echo "HATA: $hata_metni"
+        else
+            echo "HATA: Halka arz detay sayfasinda dogrulama hatasi."
+        fi
+        echo "$detay_yanit" > "$debug_dosyasi"
+        _ziraat_log "Debug: $debug_dosyasi"
+        return 1
+    fi
+
+    # 5. DetailIPO sayfasindaki talep formunu parse et
+    # Bu sayfa WizardForm yapisi kullanir (emir gibi)
+    local detay_csrf
+    detay_csrf=$(echo "$detay_yanit" | grep -oP "$_ZIRAAT_SEL_CSRF_TOKEN" | tail -n 1)
+    if [[ -z "$detay_csrf" ]]; then
+        _ziraat_log "HATA: Detay sayfasi CSRF token bulunamadi."
+        echo "HATA: Talep formu CSRF token alinamadi."
+        echo "$detay_yanit" > "$debug_dosyasi"
+        return 1
+    fi
+
+    # Hesap ID
+    local hesap_id
+    hesap_id=$(echo "$detay_yanit" | grep -oP "$_ZIRAAT_SEL_HESAP_ID" | head -1)
+
+    # WizardPageName
+    local wizard_adim
+    wizard_adim=$(echo "$detay_yanit" | grep -oP 'name="WizardPageName"[^>]*value="\K[^"]+')
+    [[ -z "$wizard_adim" ]] && wizard_adim="LayoutWizardSecondPage"
+
+    # Fiyat bilgisi (sayfadan)
+    local fiyat
+    fiyat=$(echo "$detay_yanit" | tr '\n' ' ' | grep -oP 'name="Price"[^>]*value="\K[^"]+' | head -1)
+    [[ -z "$fiyat" ]] && fiyat=$(echo "$detay_yanit" | tr '\n' ' ' | grep -oP 'id="Price"[^>]*value="\K[^"]+' | head -1)
+
+    # Minimum talep (lot)
+    local min_lot
+    min_lot=$(echo "$detay_yanit" | tr '\n' ' ' | grep -oP 'name="MinUnit"[^>]*value="\K[^"]+' | head -1)
+    [[ -z "$min_lot" ]] && min_lot=$(echo "$detay_yanit" | tr '\n' ' ' | grep -oP 'MinimumDemand[^>]*value="\K[^"]+' | head -1)
+
+    # Minimum lot kontrolu
+    if [[ -n "$min_lot" ]] && [[ "$lot" -lt "$min_lot" ]] 2>/dev/null; then
+        echo "HATA: Minimum talep miktari $min_lot lot. Girilen: $lot lot."
+        return 1
+    fi
+
+    _ziraat_log "Talep gonderiliyor: $ipo_adi, $lot lot, fiyat: ${fiyat:-belirsiz}"
+
+    # Kuru calistirma modu
+    if [[ "${KURU_CALISTIR:-0}" == "1" ]]; then
+        _ziraat_log "KURU CALISTIR: Halka arz talebi GONDERILMEDI"
+        echo ""
+        echo "========================================="
+        echo " [KURU CALISTIR] HALKA ARZ TALEBI"
+        echo "========================================="
+        echo " Halka Arz : $ipo_adi"
+        echo " IPO ID    : $ipo_id"
+        echo " Lot       : $lot"
+        echo " Fiyat     : ${fiyat:-belirsiz}"
+        echo " Min. Lot  : ${min_lot:-belirsiz}"
+        echo " Hesap     : ${hesap_id:-bilinmiyor}"
+        echo " Durum     : GONDERILMEDI"
+        echo "========================================="
+        echo ""
+        return 0
+    fi
+
+    # 6. Talep formunu POST et (NextButton — wizard adim 1)
+    local ipo_yanit_dosyasi
+    ipo_yanit_dosyasi=$(_ziraat_dosya_yolu "ipo_yanit.html")
+
+    local son_url
+    son_url=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        -H "Referer: $_ZIRAAT_IPO_DETAY_URL" \
+        -H "Origin: $_ZIRAAT_BASE_URL" \
+        --data-urlencode "__RequestVerificationToken=$detay_csrf" \
+        --data-urlencode "ddlActiveAccount=$hesap_id" \
+        --data-urlencode "Unit=$lot" \
+        --data-urlencode "Price=$fiyat" \
+        --data-urlencode "WizardPageName=$wizard_adim" \
+        --data-urlencode "button=NextButton" \
+        -w "\n__SONURL__:%{url_effective}" \
+        -o "$ipo_yanit_dosyasi" \
+        "$_ZIRAAT_IPO_DETAY_URL")
+    son_url="${son_url##*__SONURL__:}"
+
+    local ipo_yaniti
+    ipo_yaniti=$(cat "$ipo_yanit_dosyasi")
+
+    # Hata kontrolu
+    if [[ "${#ipo_yaniti}" -lt 50 ]]; then
+        _ziraat_log "HATA: Talep yaniti cok kucuk (${#ipo_yaniti} bayt)."
+        echo "HATA: Talep yaniti bos. Debug: $ipo_yanit_dosyasi"
+        return 1
+    fi
+
+    if echo "$ipo_yaniti" | grep -qiP 'validation-summary-errors'; then
+        local hata2
+        hata2=$(_ziraat_html_hata_cikar "$ipo_yaniti")
+        echo "HATA: ${hata2:-Talep formu dogrulama hatasi.}"
+        _ziraat_log "Debug: $ipo_yanit_dosyasi"
+        return 1
+    fi
+
+    # 7. Onay sayfasi kontrolu (WizardResultPage)
+    local sonraki_wizard
+    sonraki_wizard=$(echo "$ipo_yaniti" | grep -oP 'name="WizardPageName"[^>]*value="\K[^"]+')
+
+    if [[ "$sonraki_wizard" == "LayoutWizardResultPage" ]]; then
+        _ziraat_log "Onay sayfasi geldi. FinishButton ile tamamlaniyor..."
+
+        local onay_csrf
+        onay_csrf=$(echo "$ipo_yaniti" | grep -oP "$_ZIRAAT_SEL_CSRF_TOKEN" | tail -n 1)
+
+        local son_url2
+        son_url2=$(cekirdek_istek_at \
+            -c "$cookie_dosyasi" \
+            -b "$cookie_dosyasi" \
+            -H "Referer: $_ZIRAAT_IPO_DETAY_URL" \
+            -H "Origin: $_ZIRAAT_BASE_URL" \
+            --data-urlencode "__RequestVerificationToken=$onay_csrf" \
+            --data-urlencode "ddlActiveAccount=$hesap_id" \
+            --data-urlencode "Unit=$lot" \
+            --data-urlencode "Price=$fiyat" \
+            --data-urlencode "WizardPageName=$sonraki_wizard" \
+            --data-urlencode "button=FinishButton" \
+            -w "\n__SONURL__:%{url_effective}" \
+            -o "$ipo_yanit_dosyasi" \
+            "$_ZIRAAT_IPO_DETAY_URL")
+        son_url2="${son_url2##*__SONURL__:}"
+
+        local son_yanit
+        son_yanit=$(cat "$ipo_yanit_dosyasi")
+
+        if echo "$son_yanit" | grep -qiE 'kaydedilmi|kabul edilmi|ba.ar'; then
+            _ziraat_log "BASARILI: Halka arz talebi kabul edildi."
+            echo ""
+            echo "========================================="
+            echo " HALKA ARZ TALEBI KABUL EDILDI"
+            echo "========================================="
+            echo " Halka Arz : $ipo_adi"
+            echo " Lot       : $lot"
+            echo " Fiyat     : ${fiyat:-piyasa}"
+            echo " Durum     : ILETILDI"
+            echo "========================================="
+            echo ""
+            return 0
+        fi
+
+        local hata3
+        hata3=$(_ziraat_html_hata_cikar "$son_yanit")
+        if [[ -n "$hata3" ]]; then
+            echo "HATA: $hata3"
+        else
+            echo "HATA: Talep reddedildi. Debug: $ipo_yanit_dosyasi"
+        fi
+        _ziraat_log "Debug: $ipo_yanit_dosyasi"
+        return 1
+    fi
+
+    # Redirect tespiti — talep kabul edilmis olabilir
+    if [[ -n "$son_url" ]] && ! echo "$son_url" | grep -qP 'DetailIPO|ListIPO'; then
+        _ziraat_log "BASARILI: Talep kabul edildi (redirect). URL: $son_url"
+        echo ""
+        echo "========================================="
+        echo " HALKA ARZ TALEBI KABUL EDILDI"
+        echo "========================================="
+        echo " Halka Arz : $ipo_adi"
+        echo " Lot       : $lot"
+        echo " Durum     : ILETILDI"
+        echo "========================================="
+        echo ""
+        return 0
+    fi
+
+    # Bilinmeyen durum
+    local hata4
+    hata4=$(_ziraat_html_hata_cikar "$ipo_yaniti")
+    if [[ -n "$hata4" ]]; then
+        echo "HATA: $hata4"
+    else
+        echo "HATA: Talep sonucu belirsiz. Debug: $ipo_yanit_dosyasi"
+    fi
+    _ziraat_log "Debug: $ipo_yanit_dosyasi"
+    return 1
+}
+
+# -------------------------------------------------------
+# adaptor_halka_arz_iptal <talep_id>
+# Halka arz talebini iptal eder.
+# Kaynak: /sanalsube/tr/Ipo/JsonCancelIpoDemand AJAX
+# -------------------------------------------------------
+adaptor_halka_arz_iptal() {
+    local talep_id="$1"
+
+    if [[ -z "$talep_id" ]]; then
+        echo "Kullanim: borsa $ADAPTOR_ADI arz iptal <TALEP_ID>"
+        echo "Talep ID'sini gormek icin: borsa $ADAPTOR_ADI arz talepler"
+        return 1
+    fi
+
+    _ziraat_aktif_hesap_kontrol || return 1
+
+    local cookie_dosyasi
+    cookie_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_COOKIE")
+
+    _ziraat_log "Halka arz talebi iptal ediliyor. Talep ID: $talep_id"
+
+    # IpoId ve DemandId ayirma
+    # Talep ID formati: dogrudan demandId veya ipoId:demandId olabilir
+    local ipo_id="" talep_no=""
+    if [[ "$talep_id" == *":"* ]]; then
+        ipo_id="${talep_id%%:*}"
+        talep_no="${talep_id##*:}"
+    else
+        talep_no="$talep_id"
+        # IpoId'yi islem listesinden bulmak icin sayfa cekilmeli
+        # Ama JSON endpoint sadece demandId ile de calisabilir
+        # Once dogrudan deneyelim
+    fi
+
+    # CSRF token al — islem listesi sayfasindan
+    local sayfa
+    sayfa=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        "$_ZIRAAT_IPO_ISLEMLER_URL")
+
+    # AntiForgeryToken icin cookie header'i kullanilir (jsAjax.js pattern)
+    # Sayfadaki token form icinde, AJAX cagrisi ise cookie'den okur
+
+    # IpoId yoksa sayfadan bul
+    if [[ -z "$ipo_id" ]]; then
+        ipo_id=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "data-id=\"${talep_no}\"[^>]*data-ipoid=\"\K[^\"]+")
+        if [[ -z "$ipo_id" ]]; then
+            # Alternatif: data-ipoid herhangi bir yerde
+            ipo_id=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "\"${talep_no}\"[^<]*data-ipoid=\"\K[^\"]+")
+        fi
+        if [[ -z "$ipo_id" ]]; then
+            echo "HATA: Talep ID '$talep_id' icin IPO ID bulunamadi."
+            echo "Taleplerinizi gormek icin: borsa $ADAPTOR_ADI arz talepler"
+            return 1
+        fi
+    fi
+
+    _ziraat_log "Iptal: IpoId=$ipo_id, DemandId=$talep_no"
+
+    # AJAX iptal istegi
+    local iptal_yaniti
+    iptal_yaniti=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        -H "Referer: $_ZIRAAT_IPO_ISLEMLER_URL" \
+        -H "Origin: $_ZIRAAT_BASE_URL" \
+        -H "Content-Type: application/json" \
+        -H "X-Requested-With: XMLHttpRequest" \
+        -d "{\"ipoId\":\"$ipo_id\",\"demandId\":\"$talep_no\"}" \
+        "$_ZIRAAT_IPO_IPTAL_URL")
+
+    if [[ -z "$iptal_yaniti" ]]; then
+        _ziraat_log "HATA: Iptal yaniti bos."
+        echo "HATA: Sunucudan yanit alinamadi."
+        return 1
+    fi
+
+    # JSON yaniti parse et
+    if echo "$iptal_yaniti" | grep -qiP '"IsSuccess"\s*:\s*true'; then
+        local mesaj
+        mesaj=$(echo "$iptal_yaniti" | grep -oP '"Message"\s*:\s*"\K[^"]+' | head -1)
+        _ziraat_log "BASARILI: Talep iptal edildi."
+        echo ""
+        echo "========================================="
+        echo " HALKA ARZ TALEBI IPTAL EDILDI"
+        echo "========================================="
+        echo " Talep ID  : $talep_no"
+        echo " Mesaj     : ${mesaj:-Talep basariyla iptal edildi}"
+        echo " Durum     : IPTAL EDILDI"
+        echo "========================================="
+        echo ""
+        return 0
+    fi
+
+    if echo "$iptal_yaniti" | grep -qiP '"IsError"\s*:\s*true'; then
+        local hata_mesaj
+        hata_mesaj=$(echo "$iptal_yaniti" | grep -oP '"Message"\s*:\s*"\K[^"]+' | head -1)
+        echo "HATA: ${hata_mesaj:-Iptal islemi basarisiz.}"
+        _ziraat_log "HATA: $iptal_yaniti"
+        return 1
+    fi
+
+    # Bilinmeyen durum
+    local mesaj2
+    mesaj2=$(echo "$iptal_yaniti" | grep -oP '"Message"\s*:\s*"\K[^"]+' | head -1)
+    echo "UYARI: ${mesaj2:-Beklenmeyen yanit.} Sonucu dogrulayin: borsa $ADAPTOR_ADI arz talepler"
+    _ziraat_log "Beklenmeyen yanit: $iptal_yaniti"
+    return 1
+}
+
+# -------------------------------------------------------
+# adaptor_halka_arz_guncelle <talep_id> <yeni_lot>
+# Mevcut halka arz talebini gunceller (lot degistirir).
+# Kaynak: /sanalsube/tr/Ipo/JsonEditIpoDemand AJAX
+# -------------------------------------------------------
+adaptor_halka_arz_guncelle() {
+    local talep_id="$1"
+    local yeni_lot="$2"
+
+    if [[ -z "$talep_id" || -z "$yeni_lot" ]]; then
+        echo "Kullanim: borsa $ADAPTOR_ADI arz guncelle <TALEP_ID> <YENI_LOT>"
+        echo "Talep ID'sini gormek icin: borsa $ADAPTOR_ADI arz talepler"
+        return 1
+    fi
+
+    if ! cekirdek_sayi_dogrula "$yeni_lot" "Yeni Lot" "$ADAPTOR_ADI"; then
+        return 1
+    fi
+
+    _ziraat_aktif_hesap_kontrol || return 1
+
+    local cookie_dosyasi
+    cookie_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_COOKIE")
+
+    _ziraat_log "Halka arz talebi guncelleniyor. Talep: $talep_id, Yeni lot: $yeni_lot"
+
+    # IpoId ve DemandId ayir
+    local ipo_id="" talep_no=""
+    if [[ "$talep_id" == *":"* ]]; then
+        ipo_id="${talep_id%%:*}"
+        talep_no="${talep_id##*:}"
+    else
+        talep_no="$talep_id"
+    fi
+
+    # Islem listesi sayfasindan bilgileri al
+    local sayfa
+    sayfa=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        "$_ZIRAAT_IPO_ISLEMLER_URL")
+
+    # IpoId yoksa sayfadan bul
+    if [[ -z "$ipo_id" ]]; then
+        ipo_id=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "data-id=\"${talep_no}\"[^>]*data-ipoid=\"\K[^\"]+")
+        if [[ -z "$ipo_id" ]]; then
+            ipo_id=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "\"${talep_no}\"[^<]*data-ipoid=\"\K[^\"]+")
+        fi
+        if [[ -z "$ipo_id" ]]; then
+            echo "HATA: Talep ID '$talep_id' icin IPO ID bulunamadi."
+            echo "Taleplerinizi gormek icin: borsa $ADAPTOR_ADI arz talepler"
+            return 1
+        fi
+    fi
+
+    # Fiyat bilgisini sayfadan al (mevcut talebin fiyati)
+    local fiyat
+    fiyat=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "id=\"${talep_no}\"[^<]*" | grep -oP 'data-price="\K[^"]+' | head -1)
+    # Fiyat bulunamazsa, DisplayOrEdit endpoint'inden al
+    if [[ -z "$fiyat" ]]; then
+        local goruntule_yanit
+        goruntule_yanit=$(cekirdek_istek_at \
+            -c "$cookie_dosyasi" \
+            -b "$cookie_dosyasi" \
+            -H "Content-Type: application/json" \
+            -H "X-Requested-With: XMLHttpRequest" \
+            -d "{\"displayOrEdit\":\"Edit\",\"ipoId\":\"$ipo_id\",\"ipoDemandId\":\"$talep_no\",\"eq\":\"\"}" \
+            "$_ZIRAAT_IPO_GORUNTULE_URL")
+
+        fiyat=$(echo "$goruntule_yanit" | grep -oP '"Price"\s*:\s*\K[0-9.]+' | head -1)
+    fi
+    [[ -z "$fiyat" ]] && fiyat="0"
+
+    # Minimum lot
+    local min_lot
+    min_lot=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "id=\"${talep_no}\".*?item_minimum_demand[^>]*value=\"\K[^\"]+")
+    [[ -z "$min_lot" ]] && min_lot="1"
+
+    if [[ "$yeni_lot" -lt "$min_lot" ]] 2>/dev/null; then
+        echo "HATA: Minimum talep miktari $min_lot lot. Girilen: $yeni_lot lot."
+        return 1
+    fi
+
+    _ziraat_log "Guncelleme: IpoId=$ipo_id, DemandId=$talep_no, Lot=$yeni_lot, Fiyat=$fiyat"
+
+    # Tutar hesapla
+    local tutar
+    tutar=$(echo "$yeni_lot * $fiyat" | bc 2>/dev/null)
+    [[ -z "$tutar" ]] && tutar="0"
+
+    # AJAX guncelleme istegi
+    local price_items="[{\"UNIT\":$yeni_lot,\"PRICE\":$fiyat,\"AMOUNT\":$tutar}]"
+    local guncelle_yaniti
+    guncelle_yaniti=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        -H "Referer: $_ZIRAAT_IPO_ISLEMLER_URL" \
+        -H "Origin: $_ZIRAAT_BASE_URL" \
+        -H "Content-Type: application/json" \
+        -H "X-Requested-With: XMLHttpRequest" \
+        -d "{\"IPO_ID\":\"$ipo_id\",\"DEMAND_ID\":\"$talep_no\",\"MIN_UNITS\":$min_lot,\"PRICE_ITEMS\":$price_items,\"EQ\":\"\"}" \
+        "$_ZIRAAT_IPO_GUNCELLE_URL")
+
+    if [[ -z "$guncelle_yaniti" ]]; then
+        _ziraat_log "HATA: Guncelleme yaniti bos."
+        echo "HATA: Sunucudan yanit alinamadi."
+        return 1
+    fi
+
+    # JSON yaniti parse et
+    if echo "$guncelle_yaniti" | grep -qiP '"IsSuccess"\s*:\s*true'; then
+        local mesaj
+        mesaj=$(echo "$guncelle_yaniti" | grep -oP '"Message"\s*:\s*"\K[^"]+' | head -1)
+        _ziraat_log "BASARILI: Talep guncellendi."
+        echo ""
+        echo "========================================="
+        echo " HALKA ARZ TALEBI GUNCELLENDI"
+        echo "========================================="
+        echo " Talep ID  : $talep_no"
+        echo " Yeni Lot  : $yeni_lot"
+        echo " Fiyat     : $fiyat"
+        echo " Mesaj     : ${mesaj:-Talep basariyla guncellendi}"
+        echo " Durum     : GUNCELLENDI"
+        echo "========================================="
+        echo ""
+        return 0
+    fi
+
+    if echo "$guncelle_yaniti" | grep -qiP '"IsError"\s*:\s*true'; then
+        local hata_mesaj
+        hata_mesaj=$(echo "$guncelle_yaniti" | grep -oP '"Message"\s*:\s*"\K[^"]+' | head -1)
+        echo "HATA: ${hata_mesaj:-Guncelleme basarisiz.}"
+        _ziraat_log "HATA: $guncelle_yaniti"
+        return 1
+    fi
+
+    local mesaj2
+    mesaj2=$(echo "$guncelle_yaniti" | grep -oP '"Message"\s*:\s*"\K[^"]+' | head -1)
+    echo "UYARI: ${mesaj2:-Beklenmeyen yanit.} Sonucu dogrulayin: borsa $ADAPTOR_ADI arz talepler"
+    _ziraat_log "Beklenmeyen yanit: $guncelle_yaniti"
     return 1
 }
 

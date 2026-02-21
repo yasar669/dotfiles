@@ -120,6 +120,21 @@ cekirdek_aktif_hesap() {
 }
 
 # -------------------------------------------------------
+# cekirdek_kurumlari_listele
+# adaptorler/ klasorundeki kurumlari satirlar halinde dondurur.
+# Sessiz calisir, log yok. Boru hattina uyumlu.
+# -------------------------------------------------------
+cekirdek_kurumlari_listele() {
+    local surucu ad
+    for surucu in "$BORSA_KLASORU/adaptorler"/*.sh; do
+        [[ ! -f "$surucu" ]] && continue
+        ad=$(basename "$surucu" .sh)
+        [[ "$ad" == *.ayarlar ]] && continue
+        echo "$ad"
+    done
+}
+
+# -------------------------------------------------------
 # cekirdek_cookie_guvence <kurum>
 # Cookie dosyasinin izinlerini kisitla (chmod 600).
 # Dosya yoksa sessizce devam eder.
@@ -242,29 +257,25 @@ cekirdek_hesaplar() {
         local isaret="  "
 
         local cookie_yolu="${dizin}/${_CEKIRDEK_DOSYA_COOKIE}"
-        if [[ -f "$cookie_yolu" ]]; then
-            local dosya_yasi
-            dosya_yasi=$(( $(date +%s) - $(stat -c %Y "$cookie_yolu" 2>/dev/null || echo 0) ))
-            if [[ "$dosya_yasi" -lt 1800 ]]; then
-                durum="MUHTEMELEN GECERLI"
-            else
-                durum="SURESI DOLMUS OLABILIR"
-            fi
-        else
+        if [[ ! -f "$cookie_yolu" ]]; then
             durum="COOKIE YOK"
+        elif declare -f adaptor_oturum_gecerli_mi > /dev/null && adaptor_oturum_gecerli_mi "$no"; then
+            durum="GECERLI"
+        else
+            durum="GECERSIZ"
         fi
 
         if [[ "$no" == "$aktif" ]]; then
             isaret="->"
-            durum="$durum (AKTIF)"
         fi
 
-        printf " %s %-12s  %s\n" "$isaret" "$no" "$durum"
+        printf " %s %-15s  %-12s\n" "$isaret" "$no" "$durum"
         sayac=$((sayac + 1))
     done <<< "$dizinler"
 
     echo "========================================="
     echo " Toplam: $sayac oturum"
+    echo " -> = secili hesap"
     echo ""
     echo " Gecis icin : borsa $kurum hesap <NO>"
     echo " Giris icin : borsa $kurum giris"
@@ -326,6 +337,45 @@ cekirdek_yazdir_portfoy() {
     echo ""
 }
 
+# Standart portfoy detay (hisse listesi) yazici.
+# Adaptorler hisse verilerini satirlar halinde gonderir (TAB ayricli).
+# Her satir formati: SEMBOL\tLOT\tSON_FIYAT\tPIYASA_DEGERI\tMALIYET\tKAR_ZARAR\tKAR_YUZDE
+# Kullanim: cekirdek_yazdir_portfoy_detay <kurum_adi> <nakit> <hisse_toplam> <toplam> <satirlar>
+cekirdek_yazdir_portfoy_detay() {
+    local kurum="$1"
+    local nakit="$2"
+    local hisse_toplam="$3"
+    local toplam="$4"
+    local satirlar="$5"
+    local kurum_buyuk
+    kurum_buyuk=$(echo "$kurum" | tr '[:lower:]' '[:upper:]')
+
+    echo ""
+    echo "========================================================================="
+    printf "  %s - PORTFOY DETAY\n" "$kurum_buyuk"
+    echo "========================================================================="
+    printf " %-8s %10s %10s %13s %10s %12s %7s\n" \
+        "Sembol" "Lot" "Son Fiy." "Piy. Deg." "Maliyet" "Kar/Zarar" "K/Z %"
+    echo "-------------------------------------------------------------------------"
+
+    local satir
+    while IFS= read -r satir; do
+        [[ -z "$satir" ]] && continue
+        local sembol lot son_fiyat piy_degeri maliyet kar_zarar kar_yuzde
+        IFS=$'\t' read -r sembol lot son_fiyat piy_degeri maliyet kar_zarar kar_yuzde <<< "$satir"
+        printf " %-8s %10s %10s %13s %10s %12s %7s\n" \
+            "$sembol" "$lot" "$son_fiyat" "$piy_degeri" "$maliyet" "$kar_zarar" "$kar_yuzde"
+    done <<< "$satirlar"
+
+    echo "-------------------------------------------------------------------------"
+    printf " %-8s %10s %10s %13s %10s\n" "" "" "" "Hisse Top." "$hisse_toplam"
+    printf " %-8s %10s %10s %13s %10s\n" "" "" "" "Nakit" "$nakit"
+    echo "========================================================================="
+    printf " %-8s %10s %10s %13s %10s\n" "" "" "" "TOPLAM" "$toplam"
+    echo "========================================================================="
+    echo ""
+}
+
 # Standart basarili giris mesaji yazici.
 # Kullanim: cekirdek_yazdir_giris_basarili <kurum_adi>
 cekirdek_yazdir_giris_basarili() {
@@ -335,6 +385,96 @@ cekirdek_yazdir_giris_basarili() {
     echo " GIRIS BASARILI: $kurum"
     echo " Cerez dosyasi guncellendi."
     echo "========================================="
+    echo ""
+}
+
+# Standart halka arz listesi yazici.
+# Adaptorler halka arz verilerini satirlar halinde gonderir (TAB ayricli).
+# Her satir formati: AD\tTIP\tODEME\tDURUM\tIPO_ID
+# Kullanim: cekirdek_yazdir_halka_arz_liste <kurum_adi> <limit> <satirlar>
+cekirdek_yazdir_halka_arz_liste() {
+    local kurum="$1"
+    local limit="$2"
+    local satirlar="$3"
+    local kurum_buyuk
+    kurum_buyuk=$(echo "$kurum" | tr '[:lower:]' '[:upper:]')
+
+    echo ""
+    echo "========================================================================="
+    printf "  %s - HALKA ARZ LISTESI\n" "$kurum_buyuk"
+    echo "========================================================================="
+    if [[ -n "$limit" ]]; then
+        echo "  Halka Arz Islem Limiti: $limit TL"
+        echo "-------------------------------------------------------------------------"
+    fi
+
+    if [[ -z "$satirlar" ]]; then
+        echo "  Tanimli halka arz bulunmamaktadir."
+        echo "========================================================================="
+        echo ""
+        return 0
+    fi
+
+    printf " %-25s %-12s %-15s %-10s\n" \
+        "Halka Arz" "Tip" "Odeme Sekli" "Durum"
+    echo "-------------------------------------------------------------------------"
+
+    local satir
+    while IFS= read -r satir; do
+        [[ -z "$satir" ]] && continue
+        local ad tip odeme durum ipo_id
+        # shellcheck disable=SC2034
+        IFS=$'\t' read -r ad tip odeme durum ipo_id <<< "$satir"
+        printf " %-25s %-12s %-15s %-10s\n" \
+            "$ad" "$tip" "$odeme" "$durum"
+    done <<< "$satirlar"
+
+    echo "========================================================================="
+    echo " Talep icin: borsa $kurum arz talep <IPO_ADI> <LOT>"
+    echo "========================================================================="
+    echo ""
+}
+
+# Standart halka arz talepler listesi yazici.
+# Adaptorler talep verilerini satirlar halinde gonderir (TAB ayricli).
+# Her satir formati: AD\tTARIH\tLOT\tFIYAT\tTUTAR\tDURUM\tTALEP_ID
+# Kullanim: cekirdek_yazdir_halka_arz_talepler <kurum_adi> <satirlar>
+cekirdek_yazdir_halka_arz_talepler() {
+    local kurum="$1"
+    local satirlar="$2"
+    local kurum_buyuk
+    kurum_buyuk=$(echo "$kurum" | tr '[:lower:]' '[:upper:]')
+
+    echo ""
+    echo "========================================================================="
+    printf "  %s - HALKA ARZ TALEPLERIM\n" "$kurum_buyuk"
+    echo "========================================================================="
+
+    if [[ -z "$satirlar" ]]; then
+        echo "  Gosterilecek kayit bulunamadi."
+        echo "========================================================================="
+        echo ""
+        return 0
+    fi
+
+    printf " %-20s %-12s %8s %10s %12s %-12s\n" \
+        "Halka Arz" "Tarih" "Lot" "Fiyat" "Tutar" "Durum"
+    echo "-------------------------------------------------------------------------"
+
+    local satir
+    while IFS= read -r satir; do
+        [[ -z "$satir" ]] && continue
+        local ad tarih lot fiyat tutar durum talep_id
+        # shellcheck disable=SC2034
+        IFS=$'\t' read -r ad tarih lot fiyat tutar durum talep_id <<< "$satir"
+        printf " %-20s %-12s %8s %10s %12s %-12s\n" \
+            "$ad" "$tarih" "$lot" "$fiyat" "$tutar" "$durum"
+    done <<< "$satirlar"
+
+    echo "========================================================================="
+    echo " Iptal icin : borsa $kurum arz iptal <TALEP_ID>"
+    echo " Guncelle   : borsa $kurum arz guncelle <TALEP_ID> <YEN_LOT>"
+    echo "========================================================================="
     echo ""
 }
 
@@ -455,7 +595,6 @@ cekirdek_saglik_kontrol() {
         return 1
     fi
 
-    _cekirdek_log "SAGLIK [$kurum]: Tum katmanlar gecti. Veri guvenilir."
     return 0
 }
 
@@ -470,15 +609,12 @@ borsa() {
         echo "         borsa <kurum> hesap|hesaplar"
         echo ""
         echo "Kurumlar:"
-        local surucu
-        for surucu in "$BORSA_KLASORU/adaptorler"/*.sh; do
-            local ad
-            ad=$(basename "$surucu" .sh)
-            [[ "$ad" == "sablon" ]] && continue
+        local ad
+        while IFS= read -r ad; do
             echo "  - $ad"
-        done
+        done < <(cekirdek_kurumlari_listele)
         echo ""
-        echo "Komutlar: giris, bakiye, portfoy, emir, emirler, iptal"
+        echo "Komutlar: giris, bakiye, portfoy, emir, emirler, iptal, arz, hesap, hesaplar"
         echo "Kurallar: borsa kurallar [seans|fiyat|pazar [PAZAR_KODU]|takas|adim <FIYAT>|tavan <FIYAT>|taban <FIYAT>]"
         return 0
     fi
@@ -540,13 +676,10 @@ borsa() {
     if [[ ! -f "$surucu_dosyasi" ]]; then
         echo "HATA: '$kurum' surucusu bulunamadi."
         echo "Gecerli kurumlar:"
-        local s
-        for s in "$BORSA_KLASORU/adaptorler"/*.sh; do
-            local n
-            n=$(basename "$s" .sh)
-            [[ "$n" == "sablon" ]] && continue
-            echo "  - $n"
-        done
+        local k
+        while IFS= read -r k; do
+            echo "  - $k"
+        done < <(cekirdek_kurumlari_listele)
         return 1
     fi
 
@@ -577,6 +710,61 @@ borsa() {
                 return 1
             fi
             ;;
+        arz)
+            local arz_alt_komut="$1"
+            if [[ -n "$1" ]]; then shift; fi
+            case "$arz_alt_komut" in
+                liste)
+                    if declare -f adaptor_halka_arz_liste > /dev/null; then
+                        adaptor_halka_arz_liste "$@"
+                    else
+                        echo "HATA: '$kurum' surucusu 'arz liste' komutunu desteklemiyor."
+                        return 1
+                    fi
+                    ;;
+                talepler)
+                    if declare -f adaptor_halka_arz_talepler > /dev/null; then
+                        adaptor_halka_arz_talepler "$@"
+                    else
+                        echo "HATA: '$kurum' surucusu 'arz talepler' komutunu desteklemiyor."
+                        return 1
+                    fi
+                    ;;
+                talep)
+                    if declare -f adaptor_halka_arz_talep > /dev/null; then
+                        adaptor_halka_arz_talep "$@"
+                    else
+                        echo "HATA: '$kurum' surucusu 'arz talep' komutunu desteklemiyor."
+                        return 1
+                    fi
+                    ;;
+                iptal)
+                    if declare -f adaptor_halka_arz_iptal > /dev/null; then
+                        adaptor_halka_arz_iptal "$@"
+                    else
+                        echo "HATA: '$kurum' surucusu 'arz iptal' komutunu desteklemiyor."
+                        return 1
+                    fi
+                    ;;
+                guncelle)
+                    if declare -f adaptor_halka_arz_guncelle > /dev/null; then
+                        adaptor_halka_arz_guncelle "$@"
+                    else
+                        echo "HATA: '$kurum' surucusu 'arz guncelle' komutunu desteklemiyor."
+                        return 1
+                    fi
+                    ;;
+                "")
+                    echo "Kullanim: borsa $kurum arz <alt_komut>"
+                    echo "Alt komutlar: liste, talepler, talep, iptal, guncelle"
+                    ;;
+                *)
+                    echo "HATA: Bilinmeyen arz komutu: '$arz_alt_komut'"
+                    echo "Gecerli alt komutlar: liste, talepler, talep, iptal, guncelle"
+                    return 1
+                    ;;
+            esac
+            ;;
         hesap)
             if declare -f adaptor_hesap > /dev/null; then
                 adaptor_hesap "$@"
@@ -593,12 +781,20 @@ borsa() {
             ;;
         "")
             echo "Kullanim: borsa $kurum <komut>"
-            echo "Komutlar: giris, bakiye, portfoy, emir, emirler, iptal, hesap, hesaplar"
+            echo "Komutlar: giris, bakiye, portfoy, emir, emirler, iptal, arz, hesap, hesaplar"
+            echo ""
+            echo "Halka Arz:"
+            echo "  borsa $kurum arz liste                          Aktif halka arzlari goster"
+            echo "  borsa $kurum arz talepler                       Taleplerinizi listele"
+            echo "  borsa $kurum arz talep <IPO_ADI> <LOT>          Yeni talep gir"
+            echo "  borsa $kurum arz iptal <TALEP_ID>               Talebi iptal et"
+            echo "  borsa $kurum arz guncelle <TALEP_ID> <YEN_LOT>  Talebi guncelle"
+            echo ""
             echo "Ayrica:  borsa kurallar [seans|fiyat|pazar|takas|adim|tavan|taban]"
             ;;
         *)
             echo "HATA: Bilinmeyen komut: '$komut'"
-            echo "Gecerli komutlar: giris, bakiye, portfoy, emir, emirler, iptal, hesap, hesaplar"
+            echo "Gecerli komutlar: giris, bakiye, portfoy, emir, emirler, iptal, arz, hesap, hesaplar"
             return 1
             ;;
     esac
