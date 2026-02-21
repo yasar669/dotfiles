@@ -1246,8 +1246,12 @@ adaptor_halka_arz_liste() {
     fi
 
     # Halka arz islem limitini cikar
+    # Iki farkli regex denenir: IpoLimitFont class'i veya genel Limit kelimesi
     local limit
-    limit=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "$_ZIRAAT_IPO_SEL_LIMIT" | head -1)
+    limit=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "$_ZIRAAT_IPO_SEL_LIMIT_1" | head -1)
+    if [[ -z "$limit" ]]; then
+        limit=$(echo "$sayfa" | tr '\n' ' ' | grep -oP "$_ZIRAAT_IPO_SEL_LIMIT_2" | head -1)
+    fi
 
     # Aktif halka arzlari parse et
     # Her arz bir btnsubmit butonunda data-ipoid, data-name attribute'leri ile belirlenir.

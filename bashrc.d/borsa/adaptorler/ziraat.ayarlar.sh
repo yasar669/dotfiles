@@ -164,7 +164,11 @@ _ZIRAAT_IPO_SEL_ADI='data-name="\K[^"]+'
 _ZIRAAT_IPO_SEL_FININSTID='data-fininstid="\K[^"]+'
 
 # IPO limit bilgisi
-_ZIRAAT_IPO_SEL_LIMIT='Halka Arz.{1,30}[Ll]imit[^<]*<[^>]*><b[^>]*>\K[0-9.,]+'
+# HTML ornegi: <span class="IpoLimitFont">Halka Arz ... Limitiniz: <b>877,77</b> TL</span>
+# Oncelik 1: IpoLimitFont class'i icindeki <b> etiketi
+_ZIRAAT_IPO_SEL_LIMIT_1='IpoLimitFont[^<]*>[^<]*<b[^>]*>\K[0-9.,]+'
+# Oncelik 2: "Limit" kelimesinden sonraki <b> etiketi
+_ZIRAAT_IPO_SEL_LIMIT_2='[Ll]imit[^<]*<b[^>]*>\K[0-9.,]+'
 
 # IPO InvestorTypeId: Bireysel yatirimci varsayilani
 _ZIRAAT_IPO_YATIRIMCI_TIPI="0000-000002-INT"

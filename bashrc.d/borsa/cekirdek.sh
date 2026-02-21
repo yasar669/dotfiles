@@ -782,14 +782,6 @@ borsa() {
         "")
             echo "Kullanim: borsa $kurum <komut>"
             echo "Komutlar: giris, bakiye, portfoy, emir, emirler, iptal, arz, hesap, hesaplar"
-            echo ""
-            echo "Halka Arz:"
-            echo "  borsa $kurum arz liste                          Aktif halka arzlari goster"
-            echo "  borsa $kurum arz talepler                       Taleplerinizi listele"
-            echo "  borsa $kurum arz talep <IPO_ADI> <LOT>          Yeni talep gir"
-            echo "  borsa $kurum arz iptal <TALEP_ID>               Talebi iptal et"
-            echo "  borsa $kurum arz guncelle <TALEP_ID> <YEN_LOT>  Talebi guncelle"
-            echo ""
             echo "Ayrica:  borsa kurallar [seans|fiyat|pazar|takas|adim|tavan|taban]"
             ;;
         *)

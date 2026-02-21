@@ -152,27 +152,109 @@ Robot icin oturum uzatma gerekir cunku:
 
 Bu yuzden oturum koruma dongusu robot motorunun sorumlulugudur. Manuel kullarimda calistirilmaz.
 
-### 5.3 Coklu Kurum Senaryosu
+### 5.3 Coklu Kurum ve Coklu Hesap Senaryosu
 
-Uc kuruma giris yapilmis, iki robot calisiyor:
+Sistem ayni anda birden fazla kurumda birden fazla hesabi destekler.
+Her hesap bagimsiz bir oturumdur. Oturum dizini konvansiyonu:
 
 ```
-Terminal 1: borsa ziraat giris ...        -> oturum acildi
-Terminal 1: borsa isbank giris ...        -> oturum acildi
-Terminal 1: borsa garanti giris ...       -> oturum acildi
-
-Terminal 2: robot_baslat ziraat strateji_a.sh
-  +-> oturum koruma: ziraat icin arka plan dongusu baslar
-  +-> ana dongu: tarama -> strateji -> emir (ziraat uzerinden)
-
-Terminal 3: robot_baslat garanti strateji_b.sh
-  +-> oturum koruma: garanti icin arka plan dongusu baslar
-  +-> ana dongu: tarama -> strateji -> emir (garanti uzerinden)
-
-# isbank oturumu acik ama robot yok -> uzatma yok -> suresi dolunca duser (sorun degil)
+/tmp/borsa/<kurum>/<hesap_no>/cookies.txt
 ```
 
-Her robot kendi kurumuna kilitlidir. Birbirlerini etkilemez.
+Ornek: 2 Ziraat, 3 Garanti, 5 Isbank hesabi acilmis durumda:
+
+```
+/tmp/borsa/ziraat/111111/cookies.txt     # Ziraat hesap 1
+/tmp/borsa/ziraat/222222/cookies.txt     # Ziraat hesap 2
+/tmp/borsa/garanti/333333/cookies.txt    # Garanti hesap 1
+/tmp/borsa/garanti/444444/cookies.txt    # Garanti hesap 2
+/tmp/borsa/garanti/555555/cookies.txt    # Garanti hesap 3
+/tmp/borsa/isbank/666666/cookies.txt     # Isbank hesap 1
+/tmp/borsa/isbank/677777/cookies.txt     # Isbank hesap 2
+/tmp/borsa/isbank/688888/cookies.txt     # Isbank hesap 3
+/tmp/borsa/isbank/699999/cookies.txt     # Isbank hesap 4
+/tmp/borsa/isbank/600000/cookies.txt     # Isbank hesap 5
+```
+
+#### 5.3.1 Giris Asamasi (Manuel, Terminal 1)
+
+Tum hesaplara tek terminalden sirayla giris yapilir:
+
+```
+Terminal 1:
+  borsa ziraat giris 111111 parola1       -> oturum acildi
+  borsa ziraat giris 222222 parola2       -> oturum acildi
+  borsa garanti giris 333333 parola3      -> oturum acildi
+  borsa garanti giris 444444 parola4      -> oturum acildi
+  borsa garanti giris 555555 parola5      -> oturum acildi
+  borsa isbank giris 666666 parola6       -> oturum acildi
+  ...
+```
+
+Her giris kendi cookie dosyasini olusturur. Birbirini ezmez cunku dizin yolu kurum+hesap ikilisine ozeldir.
+
+#### 5.3.2 Robot Baslatma
+
+Her robot tam olarak bir kurum+hesap ikilisine kilitlenir:
+
+```
+Terminal 2: robot_baslat ziraat 111111 strateji_a.sh
+  +-> oturum koruma: ziraat/111111 icin arka plan dongusu
+  +-> ana dongu: tarama -> strateji -> emir
+  +-> tum HTTP istekleri /tmp/borsa/ziraat/111111/cookies.txt kullanir
+
+Terminal 3: robot_baslat ziraat 222222 strateji_b.sh
+  +-> oturum koruma: ziraat/222222 icin arka plan dongusu
+  +-> ana dongu: tarama -> strateji -> emir
+  +-> tum HTTP istekleri /tmp/borsa/ziraat/222222/cookies.txt kullanir
+
+Terminal 4: robot_baslat garanti 333333 strateji_c.sh
+  +-> oturum koruma: garanti/333333 icin arka plan dongusu
+  +-> ana dongu: tarama -> strateji -> emir
+  +-> tum HTTP istekleri /tmp/borsa/garanti/333333/cookies.txt kullanir
+```
+
+#### 5.3.3 Carpisma Olmaz
+
+Her robot kendi proses-lokal degiskenlerini tasir:
+
+```
+Terminal 2 icinde:
+  _ROBOT_KURUM="ziraat"
+  _ROBOT_HESAP="111111"
+
+Terminal 3 icinde:
+  _ROBOT_KURUM="ziraat"
+  _ROBOT_HESAP="222222"
+```
+
+Ayni kurumdaki iki farkli hesap bile birbirini etkilemez cunku:
+- Cookie dosyalari farkli dizinlerdedir.
+- Oturum koruma donguleri farkli PID'lerle calisir.
+- Degiskenler farkli Bash proseslerinde yasarlar.
+
+#### 5.3.4 Robot Calismazsa Ne Olur
+
+Robotu olmayan hesaplarin oturumu uzatilmaz. Bu beklenen davranistir:
+
+```
+# garanti/444444 ve garanti/555555 icin robot baslatilmadi
+# -> oturum koruma dongusu yok
+# -> sunucu timeout suresinden sonra oturumu kapatir
+# -> cookie dosyasi kalir ama gecersizdir
+# -> tekrar kullanilmak istenirse: borsa garanti giris 444444 parola
+```
+
+#### 5.3.5 Ozet Tablo
+
+| Kurum | Hesap | Robot | Oturum Koruma | Durum |
+|-------|-------|-------|---------------|-------|
+| ziraat | 111111 | Terminal 2 | Aktif | Oturum canli, emir gonderilebilir |
+| ziraat | 222222 | Terminal 3 | Aktif | Oturum canli, emir gonderilebilir |
+| garanti | 333333 | Terminal 4 | Aktif | Oturum canli, emir gonderilebilir |
+| garanti | 444444 | yok | yok | Oturum suresi dolunca duser |
+| garanti | 555555 | yok | yok | Oturum suresi dolunca duser |
+| isbank | 666666-600000 | yok | yok | Oturum suresi dolunca duser |
 
 ## 6. Adaptor Callback Arayuzu
 
