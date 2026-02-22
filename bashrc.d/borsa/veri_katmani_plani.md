@@ -535,6 +535,15 @@ _BORSA_VERI_EMIR_YON["$ext_id"]="$yon_normalize"
 
 _BORSA_VERI_EMIR_LOT["$ext_id"]=$(_borsa_sayi_temizle "${adet_p:-0}")
 
+# Lot tamsayi olmali — ondalik kismi at (binlik ayracli "1.000" -> "1000")
+local lot_temiz
+lot_temiz="${_BORSA_VERI_EMIR_LOT[$ext_id]%%.*}"
+if _borsa_sayi_gecerli_mi "$lot_temiz"; then
+    _BORSA_VERI_EMIR_LOT["$ext_id"]="$lot_temiz"
+else
+    _BORSA_VERI_EMIR_LOT["$ext_id"]=""
+fi
+
 # Fiyat: Turkce formatli olabilir, _borsa_sayi_temizle uygula
 local fiyat_temiz
 fiyat_temiz=$(_borsa_sayi_temizle "${fiyat_p:-0}")
@@ -610,19 +619,31 @@ _BORSA_VERI_SON_EMIR[piyasa_mi]="$piyasa_mi"
 _BORSA_VERI_SON_EMIR[mesaj]="Emiriniz kaydedilmistir"
 
 # HATA YOLLARI — asagidaki return 1 noktalarinin HER BIRINDEN HEMEN ONCE eklenir.
-# Erken parametre kontrol hatalari (satir 890, piyasa_mi tanimlanmadan once) KAPSAM DISIDIR.
-# Kapsam icindeki hata noktalari (piyasa_mi tanimli):
-#   1. Emir formu CSRF token bulunamadi (satir 1005): return 1
+#
+# KAPSAM DISI: Tum dogrulama kontrolleri (satir 889-984 arasi) kapsam
+# disindadir. Bu noktada emir henuz sunucuya GONDERILMEMISTIR; sifirlanmis
+# array yeterlidir. Dogrulama hatalari: parametre bos (889), gecersiz
+# islem turu (917), gecersiz bildirim (930), lot/fiyat sayisal degil
+# (936, 943), seans disi tutar (949), BIST adimi (954),
+# aktif_hesap_kontrol (984).
+#
+# KAPSAM ICI: Asagidaki 5 hata noktasinin her birinden hemen once
+# asagidaki sablon eklenir:
+#   1. CSRF token bulunamadi (satir 1005): return 1
 #   2. Hesap ID bulunamadi (satir 1012): return 1
-#   3. FinishButton sonrasi hata (satir 1195): return 1
-#   4. Ne redirect ne onay sayfasi — gercek hata (satir 1208): return 1
+#   3. Emir yaniti bos/10 bayt alti (satir 1085): return 1
+#   4. FinishButton sonrasi hata (satir 1195): return 1
+#   5. Ne redirect ne onay sayfasi — gercek hata (satir 1208): return 1
+#
+# NOT: hata_metni degiskeni satir 1195'te "hata_metni2" olarak, satir
+# 1005/1012'de ise tanimsizdir. Jenerik fallback "Emir reddedildi" kullanilir.
 _BORSA_VERI_SON_EMIR[basarili]="0"
 _BORSA_VERI_SON_EMIR[sembol]="$sembol"
 _BORSA_VERI_SON_EMIR[yon]="${islem^^}"
 _BORSA_VERI_SON_EMIR[lot]="$lot"
 _BORSA_VERI_SON_EMIR[fiyat]="$fiyat"
 _BORSA_VERI_SON_EMIR[piyasa_mi]="${piyasa_mi:-0}"
-_BORSA_VERI_SON_EMIR[mesaj]="${hata_metni:-Emir reddedildi}"
+_BORSA_VERI_SON_EMIR[mesaj]="${hata_metni:-${hata_metni2:-Emir reddedildi}}"
 ```
 
 Onemli notlar:
@@ -630,6 +651,7 @@ Onemli notlar:
 - `referans`: Sadece FinishButton basari yolunda parse edilir. Diger yollarda bos kalir.
 - `yon`: Her zaman buyuk harf (`${islem^^}`): "ALIS" veya "SATIS".
 - Hata durumunda da array doldurulur — robot motoru hangi emrin basarisiz oldugunu bilir.
+- Sifirla yerlesimleri adaptorlere gore degisir: `adaptor_emir_gonder`'de parametre kontrolunden ONCE (satir 884), `adaptor_halka_arz_talep`'te parametre kontrolunden SONRA (satir 1428). Birincisinde parametre hatasi dahi sifirlanmis array ile doner; ikincisinde eski veri kalirmis gibi gorunse de sifirlama `_ziraat_aktif_hesap_kontrol` sonrasinda yer alir ve `adaptor_halka_arz_talep`'teki erken return'ler (satir 1421, 1425) sifirlamaDAN ONCE gerceklesir. Her iki durumda da `basarili` anahtari bos ise robot "sifirlama sonrasi erken cikis" olarak yorumlar.
 
 ### 7.4.1 adaptor_emir_iptal Degisikligi
 
@@ -641,6 +663,17 @@ Hisse emri iptali sonrasinda `_BORSA_VERI_SON_EMIR` array'ine kayit yapilir. Ayn
 # SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 742):
 #   _ziraat_log "Emir iptal ediliyor. Referans: $ext_id"
 _borsa_veri_sifirla_son_emir
+
+# ARA HATA YOLLARI — sifirla (742) ile basari/hata bloklari (853) arasinda
+# 4 return 1 noktasi daha var: CSRF bulunamadi (758), sunucu JSON hatasi (779),
+# emir listede bulunamadi (806), iptal yaniti bos (826).
+# Bu noktalarin HER BIRINDEN HEMEN ONCE asagidaki sablon eklenir:
+_BORSA_VERI_SON_EMIR[basarili]="0"
+_BORSA_VERI_SON_EMIR[referans]="$ext_id"
+_BORSA_VERI_SON_EMIR[yon]="IPTAL"
+_BORSA_VERI_SON_EMIR[mesaj]="Iptal basarisiz"   # 758/779/806'da ozel mesaj yok
+# Ozellikle satir 826 (iptal yaniti bos) kritiktir: POST gonderilmis
+# olabilir. Robot motoru bu bilgiyi almasidir.
 
 # BASARI — asagidaki satirdan HEMEN ONCE eklenir (satir 853):
 #   return 0
@@ -830,6 +863,15 @@ Iptal isleminden sonra `_BORSA_VERI_SON_HALKA_ARZ` array'ine kayit yapilir:
 #   _ziraat_log "Halka arz talebi iptal ediliyor. Talep ID: $talep_id"
 _borsa_veri_sifirla_son_halka_arz
 
+# ARA HATA YOLLARI — sifirla (1759) ile basari/hata bloklari (1832) arasinda
+# 2 return 1 noktasi var: IPO ID bulunamadi (1794), iptal yaniti bos (1815).
+# Bu noktalarin HER BIRINDEN HEMEN ONCE asagidaki sablon eklenir:
+_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
+_BORSA_VERI_SON_HALKA_ARZ[islem]="iptal"
+_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
+_BORSA_VERI_SON_HALKA_ARZ[mesaj]="Iptal basarisiz"
+# Ozellikle satir 1815 (yanit bos) kritiktir: POST gonderilmis olabilir.
+
 # BASARI — asagidaki satirdan HEMEN ONCE eklenir (satir 1832):
 #   return 0
 # (IsSuccess=true blogu icindeki return 0)
@@ -866,6 +908,17 @@ Guncelleme isleminden sonra `_BORSA_VERI_SON_HALKA_ARZ` array'ine kayit yapilir:
 # SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 1875):
 #   _ziraat_log "Halka arz talebi guncelleniyor..."
 _borsa_veri_sifirla_son_halka_arz
+
+# ARA HATA YOLLARI — sifirla (1875) ile basari/hata bloklari (1976) arasinda
+# 3 return 1 noktasi var: IPO ID bulunamadi (1902), minimum lot yetersiz (1931),
+# guncelleme yaniti bos (1957).
+# Bu noktalarin HER BIRINDEN HEMEN ONCE asagidaki sablon eklenir:
+_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
+_BORSA_VERI_SON_HALKA_ARZ[islem]="guncelle"
+_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
+_BORSA_VERI_SON_HALKA_ARZ[lot]="$yeni_lot"
+_BORSA_VERI_SON_HALKA_ARZ[mesaj]="Guncelleme basarisiz"
+# Ozellikle satir 1957 (yanit bos) kritiktir: POST gonderilmis olabilir.
 
 # BASARI — asagidaki satirdan HEMEN ONCE eklenir (satir 1976):
 #   return 0
