@@ -33,11 +33,11 @@ Veri akisi:
 adaptor_bakiye()
   |
   +-> HTML parse et
-  +-> _BORSA_VERI_BAKIYE["nakit"]="45230.50"       # yapisal kayit
-  +-> _BORSA_VERI_BAKIYE["hisse"]="124518.12"       # yapisal kayit
-  +-> _BORSA_VERI_BAKIYE["toplam"]="169748.62"       # yapisal kayit
-  +-> cekirdek_yazdir_portfoy ...                    # ekrana yazdir (degismez)
+  +-> _borsa_veri_kaydet_bakiye "$nakit" "$hisse" "$toplam"  # merkezi kayit
+  +-> cekirdek_yazdir_portfoy ...                            # ekrana yazdir (degismez)
 ```
+
+Merkezi tasarim: Veri temizleme, normalizasyon ve array atamalari cekirdek.sh'daki `_borsa_veri_kaydet_*` fonksiyonlari tarafindan yapilir (Bolum 6.6). Adaptor sadece parse ettigi ham degerleri bu fonksiyonlara iletir. Boylece yeni bir adaptor (ornegin Is Bankasi) ayni veri katmanini tek satirlik cagrilarla kullanir; temizleme ve atama mantigi tekrarlanmaz.
 
 ## 4. Veri Yapilari
 
@@ -434,17 +434,238 @@ _borsa_veri_gecerli_mi() {
 }
 ```
 
+### 6.6 Veri Kayit Fonksiyonlari
+
+Merkezi kayit fonksiyonlari. Adaptor parse ettigi ham degerleri bu fonksiyonlara iletir; temizleme, normalizasyon ve array atamalari burada yapilir. Yeni adaptor eklendiginde bu fonksiyonlar oldugu gibi kullanilir.
+
+> Dosya: `bashrc.d/borsa/cekirdek.sh`
+> Ekleme noktasi: Diger yardimci fonksiyonlarla birlikte, `borsa()` fonksiyonundan ONCE (satir 635 civari).
+
+```bash
+_borsa_veri_kaydet_bakiye() {
+    # Bakiye verilerini array'e kaydeder ve zaman damgasi basar.
+    # $1: nakit (Turkce format, orn: "45.230,50")
+    # $2: hisse (Turkce format)
+    # $3: toplam (Turkce format)
+    _BORSA_VERI_BAKIYE[nakit]=$(_borsa_sayi_temizle "$1")
+    _BORSA_VERI_BAKIYE[hisse]=$(_borsa_sayi_temizle "$2")
+    _BORSA_VERI_BAKIYE[toplam]=$(_borsa_sayi_temizle "$3")
+    _BORSA_VERI_BAKIYE[zaman]=$(date +%s)
+}
+```
+
+```bash
+_borsa_veri_kaydet_hisse() {
+    # Tek hisse verisini portfoy array'lerine ekler. Dongu icinden cagrilir.
+    # Zaman damgasi BASILMAZ — dongu sonrasinda adaptor _BORSA_VERI_PORTFOY_ZAMAN'i yazar.
+    # $1: sembol
+    # $2: lot (Turkce format)
+    # $3: son fiyat (Turkce format)
+    # $4: piyasa degeri (Turkce format)
+    # $5: maliyet (Turkce format)
+    # $6: kar/zarar (Turkce format)
+    # $7: kar/zarar yuzde (Turkce format, orn: "%12,50" veya "%-3,25")
+    local sembol="$1"
+    _BORSA_VERI_SEMBOLLER+=("$sembol")
+    _BORSA_VERI_HISSE_LOT["$sembol"]=$(_borsa_sayi_temizle "$2")
+    _BORSA_VERI_HISSE_FIYAT["$sembol"]=$(_borsa_sayi_temizle "$3")
+    _BORSA_VERI_HISSE_DEGER["$sembol"]=$(_borsa_sayi_temizle "$4")
+    _BORSA_VERI_HISSE_MALIYET["$sembol"]=$(_borsa_sayi_temizle "$5")
+    _BORSA_VERI_HISSE_KAR["$sembol"]=$(_borsa_sayi_temizle "$6")
+    _BORSA_VERI_HISSE_KAR_YUZDE["$sembol"]=$(_borsa_yuzde_temizle "$7")
+}
+```
+
+```bash
+_borsa_veri_kaydet_emir() {
+    # Tek emir verisini emir array'lerine ekler. Dongu icinden cagrilir.
+    # Zaman damgasi BASILMAZ — dongu sonrasinda adaptor _BORSA_VERI_EMIRLER_ZAMAN'i yazar.
+    # $1: ext_id (referans no)
+    # $2: sembol
+    # $3: islem (HTML'den gelen ham deger, orn: "Alis"/"Satis" — normalize edilir)
+    # $4: adet (Turkce format)
+    # $5: fiyat (Turkce format)
+    # $6: durum (Iletildi/Iptal/Gerceklesti/Kismi)
+    # $7: iptal_var (bos olmayan deger = "1", bos = "0")
+    local ext_id="$1"
+    _BORSA_VERI_EMIRLER+=("$ext_id")
+    _BORSA_VERI_EMIR_SEMBOL["$ext_id"]="${2:-}"
+
+    # Yon normalizasyonu: "Alis" -> "ALIS", "Satis" -> "SATIS"
+    local yon_normalize
+    case "${3,,}" in
+        al*) yon_normalize="ALIS" ;;
+        sat*) yon_normalize="SATIS" ;;
+        *) yon_normalize="${3:-}" ;;
+    esac
+    _BORSA_VERI_EMIR_YON["$ext_id"]="$yon_normalize"
+
+    # Lot: tamsayi olmali — ondalik kismi at
+    local lot_temiz
+    lot_temiz=$(_borsa_sayi_temizle "${4:-0}")
+    lot_temiz="${lot_temiz%%.*}"
+    if _borsa_sayi_gecerli_mi "$lot_temiz"; then
+        _BORSA_VERI_EMIR_LOT["$ext_id"]="$lot_temiz"
+    else
+        _BORSA_VERI_EMIR_LOT["$ext_id"]=""
+    fi
+
+    # Fiyat
+    local fiyat_temiz
+    fiyat_temiz=$(_borsa_sayi_temizle "${5:-0}")
+    if _borsa_sayi_gecerli_mi "$fiyat_temiz"; then
+        _BORSA_VERI_EMIR_FIYAT["$ext_id"]="$fiyat_temiz"
+    else
+        _BORSA_VERI_EMIR_FIYAT["$ext_id"]=""
+    fi
+
+    _BORSA_VERI_EMIR_DURUM["$ext_id"]="$6"
+
+    # Iptal edilebilirlik: bos olmayan deger (orn: "[*]") = iptal var
+    if [[ -n "${7:-}" ]]; then
+        _BORSA_VERI_EMIR_IPTAL_VAR["$ext_id"]="1"
+    else
+        _BORSA_VERI_EMIR_IPTAL_VAR["$ext_id"]="0"
+    fi
+}
+```
+
+```bash
+_borsa_veri_kaydet_son_emir() {
+    # Son emir sonucunu kaydeder. Basari, hata veya iptal yolundan cagrilir.
+    # Tum degerler zaten islenilmis formatta gelir — temizleme yapilmaz.
+    # $1: basarili ("1" veya "0")
+    # $2: referans (bos olabilir)
+    # $3: sembol (bos olabilir — iptal durumunda bilinmez)
+    # $4: yon ("ALIS"/"SATIS"/"IPTAL")
+    # $5: lot (bos olabilir)
+    # $6: fiyat (bos olabilir)
+    # $7: piyasa_mi ("1" veya "0")
+    # $8: mesaj
+    _BORSA_VERI_SON_EMIR[basarili]="$1"
+    _BORSA_VERI_SON_EMIR[referans]="${2:-}"
+    _BORSA_VERI_SON_EMIR[sembol]="${3:-}"
+    _BORSA_VERI_SON_EMIR[yon]="${4:-}"
+    _BORSA_VERI_SON_EMIR[lot]="${5:-}"
+    _BORSA_VERI_SON_EMIR[fiyat]="${6:-}"
+    _BORSA_VERI_SON_EMIR[piyasa_mi]="${7:-0}"
+    _BORSA_VERI_SON_EMIR[mesaj]="${8:-}"
+}
+```
+
+```bash
+_borsa_veri_kaydet_halka_arz() {
+    # Tek halka arz kaydini array'e ekler. Dongu icinden cagrilir.
+    # Zaman damgasi BASILMAZ — dongu sonrasinda _borsa_veri_kaydet_halka_arz_limit cagirir.
+    # $1: ipo_id
+    # $2: ipo_adi
+    # $3: arz_tip (string, temizleme yapilmaz)
+    # $4: odeme (string, temizleme yapilmaz)
+    # $5: durum (varsayilan: "AKTIF")
+    local ipo_id="$1"
+    _BORSA_VERI_HALKA_ARZ_LISTESI+=("$ipo_id")
+    _BORSA_VERI_HALKA_ARZ_ADI["$ipo_id"]="${2:-}"
+    _BORSA_VERI_HALKA_ARZ_TIP["$ipo_id"]="${3:-}"
+    _BORSA_VERI_HALKA_ARZ_ODEME["$ipo_id"]="${4:-}"
+    _BORSA_VERI_HALKA_ARZ_DURUM["$ipo_id"]="${5:-AKTIF}"
+}
+```
+
+```bash
+_borsa_veri_kaydet_halka_arz_limit() {
+    # Halka arz islem limitini kaydeder ve zaman damgasi basar.
+    # Dongu disinda, cekirdek_yazdir_halka_arz_liste'den ONCE cagrilir.
+    # $1: limit (Turkce format; bos olabilir)
+    if [[ -n "${1:-}" ]]; then
+        local limit_temiz
+        limit_temiz=$(_borsa_sayi_temizle "$1")
+        if _borsa_sayi_gecerli_mi "$limit_temiz"; then
+            _BORSA_VERI_HALKA_ARZ_LIMIT="$limit_temiz"
+        else
+            _BORSA_VERI_HALKA_ARZ_LIMIT=""
+        fi
+    else
+        _BORSA_VERI_HALKA_ARZ_LIMIT=""
+    fi
+    _BORSA_VERI_HALKA_ARZ_ZAMAN=$(date +%s)
+}
+```
+
+```bash
+_borsa_veri_kaydet_talep() {
+    # Tek halka arz talebini array'e ekler. Dongu icinden cagrilir.
+    # Zaman damgasi BASILMAZ — dongu sonrasinda adaptor _BORSA_VERI_TALEPLER_ZAMAN'i yazar.
+    # $1: talep_id
+    # $2: ad
+    # $3: tarih (DD.MM.YYYY, donusum yapilmaz)
+    # $4: lot (Turkce format)
+    # $5: fiyat (Turkce format)
+    # $6: tutar (Turkce format)
+    # $7: durum
+    local talep_id="$1"
+    _BORSA_VERI_TALEPLER+=("$talep_id")
+    _BORSA_VERI_TALEP_ADI["$talep_id"]="${2:-}"
+    _BORSA_VERI_TALEP_TARIH["$talep_id"]="${3:-}"
+
+    # Lot: tamsayi olmali
+    local lot_temiz
+    lot_temiz=$(_borsa_sayi_temizle "${4:-0}")
+    lot_temiz="${lot_temiz%%.*}"
+    _BORSA_VERI_TALEP_LOT["$talep_id"]="$lot_temiz"
+
+    # Fiyat
+    local fiyat_temiz
+    fiyat_temiz=$(_borsa_sayi_temizle "${5:-0}")
+    if _borsa_sayi_gecerli_mi "$fiyat_temiz"; then
+        _BORSA_VERI_TALEP_FIYAT["$talep_id"]="$fiyat_temiz"
+    else
+        _BORSA_VERI_TALEP_FIYAT["$talep_id"]=""
+    fi
+
+    # Tutar
+    local tutar_temiz
+    tutar_temiz=$(_borsa_sayi_temizle "${6:-0}")
+    if _borsa_sayi_gecerli_mi "$tutar_temiz"; then
+        _BORSA_VERI_TALEP_TUTAR["$talep_id"]="$tutar_temiz"
+    else
+        _BORSA_VERI_TALEP_TUTAR["$talep_id"]=""
+    fi
+
+    _BORSA_VERI_TALEP_DURUM["$talep_id"]="${7:-}"
+}
+```
+
+```bash
+_borsa_veri_kaydet_son_halka_arz() {
+    # Son halka arz islem sonucunu kaydeder.
+    # $1: basarili ("1" veya "0")
+    # $2: islem ("talep"/"iptal"/"guncelle")
+    # $3: mesaj
+    # $4: ipo_adi (bos olabilir)
+    # $5: ipo_id (bos olabilir)
+    # $6: lot (bos olabilir)
+    # $7: fiyat (bos olabilir)
+    # $8: talep_id (bos olabilir)
+    _BORSA_VERI_SON_HALKA_ARZ[basarili]="$1"
+    _BORSA_VERI_SON_HALKA_ARZ[islem]="$2"
+    _BORSA_VERI_SON_HALKA_ARZ[mesaj]="${3:-}"
+    _BORSA_VERI_SON_HALKA_ARZ[ipo_adi]="${4:-}"
+    _BORSA_VERI_SON_HALKA_ARZ[ipo_id]="${5:-}"
+    _BORSA_VERI_SON_HALKA_ARZ[lot]="${6:-}"
+    _BORSA_VERI_SON_HALKA_ARZ[fiyat]="${7:-}"
+    _BORSA_VERI_SON_HALKA_ARZ[talep_id]="${8:-}"
+}
+```
+
 ## 7. Adaptor Degisiklikleri
 
 > Dosya: `bashrc.d/borsa/adaptorler/ziraat.sh` (tum 7.x bolumleri)
 
-Mevcut fonksiyonlara ekleme yapilir. Hicbir echo satiri silinmez veya degistirilmez.
+Mevcut fonksiyonlara ekleme yapilir. Hicbir echo satiri silinmez veya degistirilmez. Veri temizleme, normalizasyon ve array atamalari merkezi kaydet fonksiyonlari (Bolum 6.6) tarafindan yapilir — adaptor sadece parse ettigi ham degerleri tek satirlik fonksiyon cagrilariyla iletir.
 
 ### 7.1 adaptor_bakiye Degisikligi
 
 > Fonksiyon: `adaptor_bakiye()` — satir 441
-
-Fonksiyon baslangicinda sifirlama, `cekirdek_yazdir_portfoy` cagrisindan ONCE array'e kayit eklenir:
 
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 451):
@@ -453,17 +674,12 @@ _borsa_veri_sifirla_bakiye
 
 # VERI KAYDI — asagidaki satirdan HEMEN ONCE eklenir (satir 466):
 #   cekirdek_yazdir_portfoy "$ADAPTOR_ADI" "$nakit" "$hisse" "$toplam"
-_BORSA_VERI_BAKIYE[nakit]=$(_borsa_sayi_temizle "$nakit")
-_BORSA_VERI_BAKIYE[hisse]=$(_borsa_sayi_temizle "$hisse")
-_BORSA_VERI_BAKIYE[toplam]=$(_borsa_sayi_temizle "$toplam")
-_BORSA_VERI_BAKIYE[zaman]=$(date +%s)
+_borsa_veri_kaydet_bakiye "$nakit" "$hisse" "$toplam"
 ```
 
 ### 7.2 adaptor_portfoy Degisikligi
 
 > Fonksiyon: `adaptor_portfoy()` — satir 476
-
-Fonksiyon baslangicinda sifirlama, hisse parse dongusu icerisinde array'e kayit eklenir:
 
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 492):
@@ -473,26 +689,18 @@ _borsa_veri_sifirla_portfoy
 # DONGU ICINDE — asagidaki satirdan HEMEN SONRA eklenir (satir 561):
 #   printf -v satir_fmt "%s\t%s\t%s\t%s\t%s\t%s\t%s" \
 #       "$sembol" "$lot" "$son_fiyat" "$piy_degeri" "$maliyet" "$kar_zarar" "$kar_yuzde"
-_BORSA_VERI_SEMBOLLER+=("$sembol")
-_BORSA_VERI_HISSE_LOT["$sembol"]=$(_borsa_sayi_temizle "$lot")
-_BORSA_VERI_HISSE_FIYAT["$sembol"]=$(_borsa_sayi_temizle "$son_fiyat")
-_BORSA_VERI_HISSE_DEGER["$sembol"]=$(_borsa_sayi_temizle "$piy_degeri")
-_BORSA_VERI_HISSE_MALIYET["$sembol"]=$(_borsa_sayi_temizle "$maliyet")
-_BORSA_VERI_HISSE_KAR["$sembol"]=$(_borsa_sayi_temizle "$kar_zarar")
-_BORSA_VERI_HISSE_KAR_YUZDE["$sembol"]=$(_borsa_yuzde_temizle "$kar_yuzde")
+_borsa_veri_kaydet_hisse "$sembol" "$lot" "$son_fiyat" "$piy_degeri" "$maliyet" "$kar_zarar" "$kar_yuzde"
 
 # ZAMAN — asagidaki satirdan HEMEN SONRA eklenir (satir 569):
 #   done <<< "$hesap_idler"
 _BORSA_VERI_PORTFOY_ZAMAN=$(date +%s)
 ```
 
-Not: `kar_yuzde` degeri HTML'den `%12,50` veya `%-3,25` seklinde gelir. `_borsa_yuzde_temizle` fonksiyonu `%` isaretini soyar ve ondalik formatina cevirir (Bolum 5.3).
-
 ### 7.2.1 adaptor_portfoy Bakiye Verisi
 
 > Fonksiyon: `adaptor_portfoy()` — satir 476
 
-`adaptor_portfoy` fonksiyonu icinde de `nakit`, `hisse_toplam`, `toplam` degerleri parse edilir. Bu degerler `_BORSA_VERI_BAKIYE` array'ine de yazilir — boylece kullanici `adaptor_portfoy` cagirdiginda bakiye verisi de guncellenmis olur. Ayri bir `adaptor_bakiye` cagrisi gerekmez.
+`adaptor_portfoy` fonksiyonu icinde de `nakit`, `hisse_toplam`, `toplam` degerleri parse edilir. Bu degerler `_BORSA_VERI_BAKIYE` array'ine de yazilir — boylece kullanici `adaptor_portfoy` cagirdiginda bakiye verisi de guncellenmis olur.
 
 ```bash
 # BAKIYE KAYDI — asagidaki satirdan HEMEN SONRA eklenir (satir 498):
@@ -500,10 +708,7 @@ Not: `kar_yuzde` degeri HTML'den `%12,50` veya `%-3,25` seklinde gelir. `_borsa_
 # ve asagidaki satirdan ONCE (satir 501):
 #   local hesap_idler
 _borsa_veri_sifirla_bakiye
-_BORSA_VERI_BAKIYE[nakit]=$(_borsa_sayi_temizle "$nakit")
-_BORSA_VERI_BAKIYE[hisse]=$(_borsa_sayi_temizle "$hisse_toplam")
-_BORSA_VERI_BAKIYE[toplam]=$(_borsa_sayi_temizle "$toplam")
-_BORSA_VERI_BAKIYE[zaman]=$(date +%s)
+_borsa_veri_kaydet_bakiye "$nakit" "$hisse_toplam" "$toplam"
 ```
 
 Bu sayede robot motoru tek bir `adaptor_portfoy > /dev/null` cagrisiyla hem hisse hem bakiye verisine erisir.
@@ -512,8 +717,6 @@ Bu sayede robot motoru tek bir `adaptor_portfoy > /dev/null` cagrisiyla hem hiss
 
 > Fonksiyon: `adaptor_emirleri_listele()` — satir 584
 
-Dongu oncesinde sifirlama, dongu icerisinde her emir icin array'e kayit eklenir:
-
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN ONCE eklenir (satir 663):
 #   while IFS= read -r blok; do
@@ -521,59 +724,18 @@ _borsa_veri_sifirla_emirler
 
 # DONGU ICINDE — asagidaki satirdan HEMEN SONRA eklenir (satir 703):
 #   echo "$blok" | grep -q 'btnListDailyDelete' && iptal_var="[*]"
-_BORSA_VERI_EMIRLER+=("$ext_id")
-_BORSA_VERI_EMIR_SEMBOL["$ext_id"]="${sembol_p:-}"
-
-# Yon normalizasyonu: HTML'den gelen "Alış"/"Satış" -> "ALIS"/"SATIS"
-local yon_normalize
-case "${islem_p,,}" in
-    al*) yon_normalize="ALIS" ;;
-    sat*) yon_normalize="SATIS" ;;
-    *) yon_normalize="${islem_p:-}" ;;
-esac
-_BORSA_VERI_EMIR_YON["$ext_id"]="$yon_normalize"
-
-_BORSA_VERI_EMIR_LOT["$ext_id"]=$(_borsa_sayi_temizle "${adet_p:-0}")
-
-# Lot tamsayi olmali — ondalik kismi at (binlik ayracli "1.000" -> "1000")
-local lot_temiz
-lot_temiz="${_BORSA_VERI_EMIR_LOT[$ext_id]%%.*}"
-if _borsa_sayi_gecerli_mi "$lot_temiz"; then
-    _BORSA_VERI_EMIR_LOT["$ext_id"]="$lot_temiz"
-else
-    _BORSA_VERI_EMIR_LOT["$ext_id"]=""
-fi
-
-# Fiyat: Turkce formatli olabilir, _borsa_sayi_temizle uygula
-local fiyat_temiz
-fiyat_temiz=$(_borsa_sayi_temizle "${fiyat_p:-0}")
-if _borsa_sayi_gecerli_mi "$fiyat_temiz"; then
-    _BORSA_VERI_EMIR_FIYAT["$ext_id"]="$fiyat_temiz"
-else
-    _BORSA_VERI_EMIR_FIYAT["$ext_id"]=""
-fi
-
-_BORSA_VERI_EMIR_DURUM["$ext_id"]="$durum_p"
-
-# Iptal edilebilirlik gostergesi
-if [[ -n "$iptal_var" ]]; then
-    _BORSA_VERI_EMIR_IPTAL_VAR["$ext_id"]="1"
-else
-    _BORSA_VERI_EMIR_IPTAL_VAR["$ext_id"]="0"
-fi
+_borsa_veri_kaydet_emir "$ext_id" "${sembol_p:-}" "${islem_p:-}" "${adet_p:-}" "${fiyat_p:-}" "$durum_p" "$iptal_var"
 
 # ZAMAN — asagidaki satirdan HEMEN ONCE eklenir (satir 711):
 #   if [[ "$bulunan" -eq 0 ]]; then
 _BORSA_VERI_EMIRLER_ZAMAN=$(date +%s)
 ```
 
-Kod, mevcut `durum_p` case blogunun sonucunu kullanir (Iletildi, Iptal, Gerceklesti, Kismi). Normalize edilmis haliyle array'e yazilir.
+Yon normalizasyonu, lot/fiyat temizleme ve iptal_var donusumu `_borsa_veri_kaydet_emir` fonksiyonu tarafindan yapilir (Bolum 6.6).
 
 ### 7.4 adaptor_emir_gonder Degisikligi
 
 > Fonksiyon: `adaptor_emir_gonder()` — satir 879
-
-Fonksiyonun baslangicinda sifirlama, her basari/basarisizlik yolunda kayit yapilir:
 
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 884):
@@ -582,43 +744,22 @@ _borsa_veri_sifirla_son_emir
 
 # KURU CALISTIR — asagidaki satirdan HEMEN ONCE eklenir (satir 980):
 #   return 0
-# (KURU CALISTIR blogu icindeki return 0)
-_BORSA_VERI_SON_EMIR[basarili]="1"
-_BORSA_VERI_SON_EMIR[referans]="KURU"
-_BORSA_VERI_SON_EMIR[sembol]="$sembol"
-_BORSA_VERI_SON_EMIR[yon]="${islem^^}"
-_BORSA_VERI_SON_EMIR[lot]="$lot"
-_BORSA_VERI_SON_EMIR[fiyat]="$fiyat"
-_BORSA_VERI_SON_EMIR[piyasa_mi]="$piyasa_mi"
-_BORSA_VERI_SON_EMIR[mesaj]="Kuru calistirma — emir gonderilmedi"
+_borsa_veri_kaydet_son_emir "1" "KURU" "$sembol" "${islem^^}" "$lot" "$fiyat" "$piyasa_mi" \
+    "Kuru calistirma — emir gonderilmedi"
 
 # BASARI YOLU 1 — Redirect tespiti
 # Asagidaki satirdan HEMEN ONCE eklenir (satir 1103):
 #   return 0
-# (son_url redirect kontrolu blogu icindeki return 0)
-_BORSA_VERI_SON_EMIR[basarili]="1"
-_BORSA_VERI_SON_EMIR[referans]=""
-_BORSA_VERI_SON_EMIR[sembol]="$sembol"
-_BORSA_VERI_SON_EMIR[yon]="${islem^^}"
-_BORSA_VERI_SON_EMIR[lot]="$lot"
-_BORSA_VERI_SON_EMIR[fiyat]="$fiyat"
-_BORSA_VERI_SON_EMIR[piyasa_mi]="$piyasa_mi"
-_BORSA_VERI_SON_EMIR[mesaj]="Emir kabul edildi (redirect)"
+_borsa_veri_kaydet_son_emir "1" "" "$sembol" "${islem^^}" "$lot" "$fiyat" "$piyasa_mi" \
+    "Emir kabul edildi (redirect)"
 
 # BASARI YOLU 2 — FinishButton sonrasi "kaydedilmis" tespiti
 # Asagidaki satirdan HEMEN ONCE eklenir (satir 1183):
 #   return 0
-# (kaydedilmis/iletilmis grep blogu icindeki return 0)
-_BORSA_VERI_SON_EMIR[basarili]="1"
-_BORSA_VERI_SON_EMIR[referans]="${referans_no:-}"
-_BORSA_VERI_SON_EMIR[sembol]="$sembol"
-_BORSA_VERI_SON_EMIR[yon]="${islem^^}"
-_BORSA_VERI_SON_EMIR[lot]="$lot"
-_BORSA_VERI_SON_EMIR[fiyat]="$fiyat"
-_BORSA_VERI_SON_EMIR[piyasa_mi]="$piyasa_mi"
-_BORSA_VERI_SON_EMIR[mesaj]="Emiriniz kaydedilmistir"
+_borsa_veri_kaydet_son_emir "1" "${referans_no:-}" "$sembol" "${islem^^}" "$lot" "$fiyat" "$piyasa_mi" \
+    "Emiriniz kaydedilmistir"
 
-# HATA YOLLARI — asagidaki return 1 noktalarinin HER BIRINDEN HEMEN ONCE eklenir.
+# HATA YOLLARI — her return 1'den once eklenir.
 #
 # KAPSAM DISI: Tum dogrulama kontrolleri (satir 889-984 arasi) kapsam
 # disindadir. Bu noktada emir henuz sunucuya GONDERILMEMISTIR; sifirlanmis
@@ -627,8 +768,7 @@ _BORSA_VERI_SON_EMIR[mesaj]="Emiriniz kaydedilmistir"
 # (936, 943), seans disi tutar (949), BIST adimi (954),
 # aktif_hesap_kontrol (984).
 #
-# KAPSAM ICI: Asagidaki 5 hata noktasinin her birinden hemen once
-# asagidaki sablon eklenir:
+# KAPSAM ICI: Asagidaki 5 hata noktasinin her birinden hemen once:
 #   1. CSRF token bulunamadi (satir 1005): return 1
 #   2. Hesap ID bulunamadi (satir 1012): return 1
 #   3. Emir yaniti bos/10 bayt alti (satir 1085): return 1
@@ -637,13 +777,8 @@ _BORSA_VERI_SON_EMIR[mesaj]="Emiriniz kaydedilmistir"
 #
 # NOT: hata_metni degiskeni satir 1195'te "hata_metni2" olarak, satir
 # 1005/1012'de ise tanimsizdir. Jenerik fallback "Emir reddedildi" kullanilir.
-_BORSA_VERI_SON_EMIR[basarili]="0"
-_BORSA_VERI_SON_EMIR[sembol]="$sembol"
-_BORSA_VERI_SON_EMIR[yon]="${islem^^}"
-_BORSA_VERI_SON_EMIR[lot]="$lot"
-_BORSA_VERI_SON_EMIR[fiyat]="$fiyat"
-_BORSA_VERI_SON_EMIR[piyasa_mi]="${piyasa_mi:-0}"
-_BORSA_VERI_SON_EMIR[mesaj]="${hata_metni:-${hata_metni2:-Emir reddedildi}}"
+_borsa_veri_kaydet_son_emir "0" "" "$sembol" "${islem^^}" "$lot" "$fiyat" \
+    "${piyasa_mi:-0}" "${hata_metni:-${hata_metni2:-Emir reddedildi}}"
 ```
 
 Onemli notlar:
@@ -665,46 +800,26 @@ Hisse emri iptali sonrasinda `_BORSA_VERI_SON_EMIR` array'ine kayit yapilir. Ayn
 _borsa_veri_sifirla_son_emir
 
 # ARA HATA YOLLARI — sifirla (742) ile basari/hata bloklari (853) arasinda
-# 4 return 1 noktasi daha var: CSRF bulunamadi (758), sunucu JSON hatasi (779),
+# 4 return 1 noktasi: CSRF bulunamadi (758), sunucu JSON hatasi (779),
 # emir listede bulunamadi (806), iptal yaniti bos (826).
-# Bu noktalarin HER BIRINDEN HEMEN ONCE asagidaki sablon eklenir:
-_BORSA_VERI_SON_EMIR[basarili]="0"
-_BORSA_VERI_SON_EMIR[referans]="$ext_id"
-_BORSA_VERI_SON_EMIR[yon]="IPTAL"
-_BORSA_VERI_SON_EMIR[mesaj]="Iptal basarisiz"   # 758/779/806'da ozel mesaj yok
-# Ozellikle satir 826 (iptal yaniti bos) kritiktir: POST gonderilmis
-# olabilir. Robot motoru bu bilgiyi almasidir.
+# Her birinden HEMEN ONCE:
+_borsa_veri_kaydet_son_emir "0" "$ext_id" "" "IPTAL" "" "" "0" "Iptal basarisiz"
+# Ozellikle satir 826 (iptal yaniti bos) kritiktir: POST gonderilmis olabilir.
 
 # BASARI — asagidaki satirdan HEMEN ONCE eklenir (satir 853):
 #   return 0
-# (SILMEOK veya IsSuccess=true blogu icindeki return 0)
-_BORSA_VERI_SON_EMIR[basarili]="1"
-_BORSA_VERI_SON_EMIR[referans]="$ext_id"
-_BORSA_VERI_SON_EMIR[sembol]=""             # iptalden sembol bilinmez
-_BORSA_VERI_SON_EMIR[yon]="IPTAL"
-_BORSA_VERI_SON_EMIR[lot]=""
-_BORSA_VERI_SON_EMIR[fiyat]=""
-_BORSA_VERI_SON_EMIR[piyasa_mi]="0"
-_BORSA_VERI_SON_EMIR[mesaj]="${mesaj:-Emir iptal edildi}"
+_borsa_veri_kaydet_son_emir "1" "$ext_id" "" "IPTAL" "" "" "0" "${mesaj:-Emir iptal edildi}"
 
 # HATA — asagidaki satirdan HEMEN ONCE eklenir (satir 862):
 #   return 1
-# (IsError=true blogu icindeki return 1)
-_BORSA_VERI_SON_EMIR[basarili]="0"
-_BORSA_VERI_SON_EMIR[referans]="$ext_id"
-_BORSA_VERI_SON_EMIR[yon]="IPTAL"
-_BORSA_VERI_SON_EMIR[mesaj]="${hata:-Iptal basarisiz}"
+_borsa_veri_kaydet_son_emir "0" "$ext_id" "" "IPTAL" "" "" "0" "${hata:-Iptal basarisiz}"
 
 # BILINMEYEN DURUM — asagidaki satirdan HEMEN ONCE eklenir (satir 876):
 #   return 1
-# (Ne IsSuccess ne IsError — beklenmeyen yanit formati)
-_BORSA_VERI_SON_EMIR[basarili]="0"
-_BORSA_VERI_SON_EMIR[referans]="$ext_id"
-_BORSA_VERI_SON_EMIR[yon]="IPTAL"
-_BORSA_VERI_SON_EMIR[mesaj]="${hata:-Bilinmeyen iptal sonucu}"
+_borsa_veri_kaydet_son_emir "0" "$ext_id" "" "IPTAL" "" "" "0" "${hata:-Bilinmeyen iptal sonucu}"
 ```
 
-Not: `yon="IPTAL"` ozel degeri, robot motoruna bu islemin bir emir gonderimi degil iptal oldugunu bildirir. Robot motoru `yon` degerini kontrol ederek akisi yonetir:
+Not: `yon="IPTAL"` degerini `_borsa_veri_kaydet_son_emir` dogrudan kaydeder. Robot motoru:
 
 ```bash
 if [[ "${_BORSA_VERI_SON_EMIR[yon]}" == "IPTAL" ]]; then
@@ -718,8 +833,6 @@ fi
 
 > Fonksiyon: `adaptor_halka_arz_liste()` — satir 1220
 
-Parse dongusu icerisinde her halka arz icin array'e kayit eklenir:
-
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN ONCE eklenir (satir 1272):
 #   while IFS= read -r blok; do
@@ -727,37 +840,18 @@ _borsa_veri_sifirla_halka_arz_liste
 
 # DONGU ICINDE — asagidaki satirdan HEMEN SONRA eklenir (satir 1300):
 #   local satir="${ipo_adi}\t${arz_tip:-Bilinmiyor}\t..."
-_BORSA_VERI_HALKA_ARZ_LISTESI+=("$ipo_id")
-_BORSA_VERI_HALKA_ARZ_ADI["$ipo_id"]="${ipo_adi:-}"
-_BORSA_VERI_HALKA_ARZ_TIP["$ipo_id"]="${arz_tip:-}"
-_BORSA_VERI_HALKA_ARZ_ODEME["$ipo_id"]="${odeme:-}"
-_BORSA_VERI_HALKA_ARZ_DURUM["$ipo_id"]="${durum:-AKTIF}"
+_borsa_veri_kaydet_halka_arz "$ipo_id" "${ipo_adi:-}" "${arz_tip:-}" "${odeme:-}" "${durum:-AKTIF}"
 
 # LIMIT + ZAMAN — asagidaki satirdan HEMEN ONCE eklenir (satir 1312):
 #   cekirdek_yazdir_halka_arz_liste "$ADAPTOR_ADI" "$limit" "$cozulmus_satirlar"
-# Limit degeri icin _borsa_sayi_temizle uygula
-if [[ -n "$limit" ]]; then
-    local limit_temiz
-    limit_temiz=$(_borsa_sayi_temizle "$limit")
-    if _borsa_sayi_gecerli_mi "$limit_temiz"; then
-        _BORSA_VERI_HALKA_ARZ_LIMIT="$limit_temiz"
-    else
-        _BORSA_VERI_HALKA_ARZ_LIMIT=""
-    fi
-else
-    _BORSA_VERI_HALKA_ARZ_LIMIT=""
-fi
-
-_BORSA_VERI_HALKA_ARZ_ZAMAN=$(date +%s)
+_borsa_veri_kaydet_halka_arz_limit "$limit"
 ```
 
-Not: `arz_tip` ve `odeme` string degerlerdir, `_borsa_sayi_temizle` UYGULANMAZ. Parse basarisiz olursa bos string kalir ("Bilinmiyor" YAZILMAZ — o sadece ekran ciktisinda kullanilir).
+Not: `arz_tip` ve `odeme` string degerlerdir, `_borsa_sayi_temizle` UYGULANMAZ. Limit temizleme ve zaman damgasi `_borsa_veri_kaydet_halka_arz_limit` tarafindan yapilir (Bolum 6.6).
 
 ### 7.6 adaptor_halka_arz_talepler Degisikligi
 
 > Fonksiyon: `adaptor_halka_arz_talepler()` — satir 1321
-
-Parse dongusu icerisinde her talep icin array'e kayit eklenir:
 
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN ONCE eklenir (satir 1366):
@@ -766,97 +860,43 @@ _borsa_veri_sifirla_halka_arz_talepler
 
 # DONGU ICINDE — asagidaki satirdan HEMEN SONRA eklenir (satir 1395):
 #   local satir="${ad}\t${tarih}\t${lot}\t..."
-_BORSA_VERI_TALEPLER+=("$talep_id")
-_BORSA_VERI_TALEP_ADI["$talep_id"]="${ad:-}"
-_BORSA_VERI_TALEP_TARIH["$talep_id"]="${tarih:-}"
-
-# Lot: tamsayi ama binlik ayracli olabilir
-local lot_temiz
-lot_temiz=$(_borsa_sayi_temizle "${lot:-0}")
-# Lot tamsayi olmali — ondalik kismi at
-lot_temiz="${lot_temiz%%.*}"
-_BORSA_VERI_TALEP_LOT["$talep_id"]="$lot_temiz"
-
-# Fiyat
-local fiyat_temiz
-fiyat_temiz=$(_borsa_sayi_temizle "${fiyat:-0}")
-if _borsa_sayi_gecerli_mi "$fiyat_temiz"; then
-    _BORSA_VERI_TALEP_FIYAT["$talep_id"]="$fiyat_temiz"
-else
-    _BORSA_VERI_TALEP_FIYAT["$talep_id"]=""
-fi
-
-# Tutar
-local tutar_temiz
-tutar_temiz=$(_borsa_sayi_temizle "${tutar:-0}")
-if _borsa_sayi_gecerli_mi "$tutar_temiz"; then
-    _BORSA_VERI_TALEP_TUTAR["$talep_id"]="$tutar_temiz"
-else
-    _BORSA_VERI_TALEP_TUTAR["$talep_id"]=""
-fi
-
-_BORSA_VERI_TALEP_DURUM["$talep_id"]="${durum:-}"
+_borsa_veri_kaydet_talep "$talep_id" "${ad:-}" "${tarih:-}" "${lot:-}" "${fiyat:-}" "${tutar:-}" "${durum:-}"
 
 # ZAMAN — asagidaki satirdan HEMEN ONCE eklenir (satir 1406):
 #   cekirdek_yazdir_halka_arz_talepler "$ADAPTOR_ADI" "$cozulmus_satirlar"
 _BORSA_VERI_TALEPLER_ZAMAN=$(date +%s)
 ```
 
-Not: `tarih` string olarak saklanir (DD.MM.YYYY formati, donusum YAPILMAZ).
+Not: `tarih` string olarak saklanir (DD.MM.YYYY formati, donusum YAPILMAZ). Lot/fiyat/tutar temizleme `_borsa_veri_kaydet_talep` tarafindan yapilir (Bolum 6.6).
 
 ### 7.7 adaptor_halka_arz_talep Degisikligi
 
 > Fonksiyon: `adaptor_halka_arz_talep()` — satir 1415
 
-Talep gonderimi sonrasinda `_BORSA_VERI_SON_HALKA_ARZ` array'ine kayit yapilir:
-
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 1428):
 #   _ziraat_aktif_hesap_kontrol || return 1
-# (parametre ve sayi kontrolunden sonra, cookie_dosyasi'ndan once)
 _borsa_veri_sifirla_son_halka_arz
 
 # KURU CALISTIR — asagidaki satirdan HEMEN ONCE eklenir (satir 1615):
 #   return 0
-# (KURU CALISTIR blogu icindeki return 0)
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="1"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="talep"
-_BORSA_VERI_SON_HALKA_ARZ[ipo_adi]="$ipo_adi"
-_BORSA_VERI_SON_HALKA_ARZ[ipo_id]="$ipo_id"
-_BORSA_VERI_SON_HALKA_ARZ[lot]="$lot"
-_BORSA_VERI_SON_HALKA_ARZ[fiyat]="${fiyat:-0}"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="Kuru calistirma — talep gonderilmedi"
+_borsa_veri_kaydet_son_halka_arz "1" "talep" \
+    "Kuru calistirma — talep gonderilmedi" "$ipo_adi" "$ipo_id" "$lot" "${fiyat:-0}" ""
 
-# BASARI YOLLARI — 2 basari noktasi var:
-#   1. FinishButton sonrasi "kaydedilmis" tespiti (satir 1699): return 0
+# BASARI YOLLARI — 2 basari noktasi:
+#   1. FinishButton sonrasi (satir 1699): return 0
 #   2. Redirect tespiti (satir 1725): return 0
-# Her ikisinde de asagidaki satirdan HEMEN ONCE eklenir:
-#   return 0
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="1"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="talep"
-_BORSA_VERI_SON_HALKA_ARZ[ipo_adi]="$ipo_adi"
-_BORSA_VERI_SON_HALKA_ARZ[ipo_id]="$ipo_id"
-_BORSA_VERI_SON_HALKA_ARZ[lot]="$lot"
-_BORSA_VERI_SON_HALKA_ARZ[fiyat]="${fiyat:-0}"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="Talep kabul edildi"
+_borsa_veri_kaydet_son_halka_arz "1" "talep" \
+    "Talep kabul edildi" "$ipo_adi" "$ipo_id" "$lot" "${fiyat:-0}" ""
 
-# HATA YOLLARI — her return 1'den once eklenir.
-# 5+ hata noktasi var (sayfa alinamadi, login, arz bulunamadi, CSRF, dogrulama, bilinmeyen durum).
-# Hepsinde asagidaki satirdan HEMEN ONCE:
-#   return 1
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="talep"
-_BORSA_VERI_SON_HALKA_ARZ[ipo_adi]="${ipo_adi:-}"
-_BORSA_VERI_SON_HALKA_ARZ[ipo_id]="${ipo_id:-}"
-_BORSA_VERI_SON_HALKA_ARZ[lot]="$lot"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="${hata_metni:-Talep reddedildi}"
+# HATA YOLLARI — her return 1'den once:
+_borsa_veri_kaydet_son_halka_arz "0" "talep" \
+    "${hata_metni:-Talep reddedildi}" "${ipo_adi:-}" "${ipo_id:-}" "$lot" "" ""
 ```
 
 ### 7.8 adaptor_halka_arz_iptal Degisikligi
 
 > Fonksiyon: `adaptor_halka_arz_iptal()` — satir 1745
-
-Iptal isleminden sonra `_BORSA_VERI_SON_HALKA_ARZ` array'ine kayit yapilir:
 
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 1759):
@@ -864,45 +904,24 @@ Iptal isleminden sonra `_BORSA_VERI_SON_HALKA_ARZ` array'ine kayit yapilir:
 _borsa_veri_sifirla_son_halka_arz
 
 # ARA HATA YOLLARI — sifirla (1759) ile basari/hata bloklari (1832) arasinda
-# 2 return 1 noktasi var: IPO ID bulunamadi (1794), iptal yaniti bos (1815).
-# Bu noktalarin HER BIRINDEN HEMEN ONCE asagidaki sablon eklenir:
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="iptal"
-_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="Iptal basarisiz"
+# 2 return 1 noktasi: IPO ID bulunamadi (1794), iptal yaniti bos (1815).
+# Her birinden HEMEN ONCE:
+_borsa_veri_kaydet_son_halka_arz "0" "iptal" "Iptal basarisiz" "" "" "" "" "$talep_no"
 # Ozellikle satir 1815 (yanit bos) kritiktir: POST gonderilmis olabilir.
 
-# BASARI — asagidaki satirdan HEMEN ONCE eklenir (satir 1832):
-#   return 0
-# (IsSuccess=true blogu icindeki return 0)
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="1"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="iptal"
-_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
-_BORSA_VERI_SON_HALKA_ARZ[ipo_id]="$ipo_id"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="${mesaj:-Talep iptal edildi}"
+# BASARI — satir 1832'den HEMEN ONCE:
+_borsa_veri_kaydet_son_halka_arz "1" "iptal" "${mesaj:-Talep iptal edildi}" "" "$ipo_id" "" "" "$talep_no"
 
-# HATA — asagidaki satirdan HEMEN ONCE eklenir (satir 1840):
-#   return 1
-# (IsError=true blogu icindeki return 1)
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="iptal"
-_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="${hata_mesaj:-Iptal basarisiz}"
+# HATA — satir 1840'dan HEMEN ONCE:
+_borsa_veri_kaydet_son_halka_arz "0" "iptal" "${hata_mesaj:-Iptal basarisiz}" "" "" "" "" "$talep_no"
 
-# BILINMEYEN DURUM — asagidaki satirdan HEMEN ONCE eklenir (satir 1848):
-#   return 1
-# (Ne IsSuccess ne IsError — beklenmeyen yanit formati)
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="iptal"
-_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="${mesaj2:-Bilinmeyen iptal sonucu}"
+# BILINMEYEN DURUM — satir 1848'den HEMEN ONCE:
+_borsa_veri_kaydet_son_halka_arz "0" "iptal" "${mesaj2:-Bilinmeyen iptal sonucu}" "" "" "" "" "$talep_no"
 ```
 
 ### 7.9 adaptor_halka_arz_guncelle Degisikligi
 
 > Fonksiyon: `adaptor_halka_arz_guncelle()` — satir 1856
-
-Guncelleme isleminden sonra `_BORSA_VERI_SON_HALKA_ARZ` array'ine kayit yapilir:
 
 ```bash
 # SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 1875):
@@ -910,44 +929,23 @@ Guncelleme isleminden sonra `_BORSA_VERI_SON_HALKA_ARZ` array'ine kayit yapilir:
 _borsa_veri_sifirla_son_halka_arz
 
 # ARA HATA YOLLARI — sifirla (1875) ile basari/hata bloklari (1976) arasinda
-# 3 return 1 noktasi var: IPO ID bulunamadi (1902), minimum lot yetersiz (1931),
+# 3 return 1 noktasi: IPO ID bulunamadi (1902), minimum lot yetersiz (1931),
 # guncelleme yaniti bos (1957).
-# Bu noktalarin HER BIRINDEN HEMEN ONCE asagidaki sablon eklenir:
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="guncelle"
-_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
-_BORSA_VERI_SON_HALKA_ARZ[lot]="$yeni_lot"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="Guncelleme basarisiz"
+# Her birinden HEMEN ONCE:
+_borsa_veri_kaydet_son_halka_arz "0" "guncelle" "Guncelleme basarisiz" "" "" "$yeni_lot" "" "$talep_no"
 # Ozellikle satir 1957 (yanit bos) kritiktir: POST gonderilmis olabilir.
 
-# BASARI — asagidaki satirdan HEMEN ONCE eklenir (satir 1976):
-#   return 0
-# (IsSuccess=true blogu icindeki return 0)
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="1"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="guncelle"
-_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
-_BORSA_VERI_SON_HALKA_ARZ[ipo_id]="$ipo_id"
-_BORSA_VERI_SON_HALKA_ARZ[lot]="$yeni_lot"
-_BORSA_VERI_SON_HALKA_ARZ[fiyat]="$fiyat"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="${mesaj:-Talep guncellendi}"
+# BASARI — satir 1976'dan HEMEN ONCE:
+_borsa_veri_kaydet_son_halka_arz "1" "guncelle" \
+    "${mesaj:-Talep guncellendi}" "" "$ipo_id" "$yeni_lot" "$fiyat" "$talep_no"
 
-# HATA — asagidaki satirdan HEMEN ONCE eklenir (satir 1984):
-#   return 1
-# (IsError=true blogu icindeki return 1)
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="guncelle"
-_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
-_BORSA_VERI_SON_HALKA_ARZ[lot]="$yeni_lot"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="${hata_mesaj:-Guncelleme basarisiz}"
+# HATA — satir 1984'ten HEMEN ONCE:
+_borsa_veri_kaydet_son_halka_arz "0" "guncelle" \
+    "${hata_mesaj:-Guncelleme basarisiz}" "" "" "$yeni_lot" "" "$talep_no"
 
-# BILINMEYEN DURUM — asagidaki satirdan HEMEN ONCE eklenir (satir 1991):
-#   return 1
-# (Ne IsSuccess ne IsError — beklenmeyen yanit formati)
-_BORSA_VERI_SON_HALKA_ARZ[basarili]="0"
-_BORSA_VERI_SON_HALKA_ARZ[islem]="guncelle"
-_BORSA_VERI_SON_HALKA_ARZ[talep_id]="$talep_no"
-_BORSA_VERI_SON_HALKA_ARZ[lot]="$yeni_lot"
-_BORSA_VERI_SON_HALKA_ARZ[mesaj]="${mesaj2:-Bilinmeyen guncelleme sonucu}"
+# BILINMEYEN DURUM — satir 1991'den HEMEN ONCE:
+_borsa_veri_kaydet_son_halka_arz "0" "guncelle" \
+    "${mesaj2:-Bilinmeyen guncelleme sonucu}" "" "" "$yeni_lot" "" "$talep_no"
 ```
 
 ## 8. Kullanim Ornekleri
@@ -1021,19 +1019,19 @@ echo "Toplam: $toplam_tutar TL"
 
 `bashrc.d/borsa/cekirdek.sh` icerisine:
 - `declare -gA _CEKIRDEK_AKTIF_HESAPLAR` satirindan sonra (satir 42): Tum `declare -gA/ga/g` veri tanimlari (Bolum 4)
-- `borsa()` fonksiyonundan once (satir 635 civari): Tum yardimci fonksiyonlar (Bolum 6)
+- `borsa()` fonksiyonundan once (satir 635 civari): Tum yardimci fonksiyonlar — temizleme, sifirlama, gecerlilik ve merkezi veri kayit fonksiyonlari (Bolum 6)
 
 ### 9.2 Adim 2 — Bakiye ve Portfoy
 
-`bashrc.d/borsa/adaptorler/ziraat.sh` icerisinde `adaptor_bakiye` (satir 441) ve `adaptor_portfoy` (satir 476) fonksiyonlarina veri kaydi eklenir. Ekran ciktilari degismez. Test: bakiye sonrasi `echo "${_BORSA_VERI_BAKIYE[nakit]}"` kontrolu.
+`bashrc.d/borsa/adaptorler/ziraat.sh` icerisinde `adaptor_bakiye` (satir 441) ve `adaptor_portfoy` (satir 476) fonksiyonlarina merkezi kaydet cagrilari eklenir. Ekran ciktilari degismez. Test: bakiye sonrasi `echo "${_BORSA_VERI_BAKIYE[nakit]}"` kontrolu.
 
 ### 9.3 Adim 3 — Emirler
 
-`bashrc.d/borsa/adaptorler/ziraat.sh` icerisinde `adaptor_emirleri_listele` (satir 584), `adaptor_emir_gonder` (satir 879) ve `adaptor_emir_iptal` (satir 724) fonksiyonlarina veri kaydi eklenir.
+`bashrc.d/borsa/adaptorler/ziraat.sh` icerisinde `adaptor_emirleri_listele` (satir 584), `adaptor_emir_gonder` (satir 879) ve `adaptor_emir_iptal` (satir 724) fonksiyonlarina merkezi kaydet cagrilari eklenir.
 
 ### 9.4 Adim 4 — Halka Arz
 
-`bashrc.d/borsa/adaptorler/ziraat.sh` icerisinde `adaptor_halka_arz_liste` (satir 1220) ve `adaptor_halka_arz_talepler` (satir 1321) fonksiyonlarina veri kaydi eklenir. `adaptor_halka_arz_talep` (satir 1415), `adaptor_halka_arz_iptal` (satir 1745) ve `adaptor_halka_arz_guncelle` (satir 1856) fonksiyonlarina `_BORSA_VERI_SON_HALKA_ARZ` kaydi eklenir.
+`bashrc.d/borsa/adaptorler/ziraat.sh` icerisinde `adaptor_halka_arz_liste` (satir 1220) ve `adaptor_halka_arz_talepler` (satir 1321) fonksiyonlarina merkezi kaydet cagrilari eklenir. `adaptor_halka_arz_talep` (satir 1415), `adaptor_halka_arz_iptal` (satir 1745) ve `adaptor_halka_arz_guncelle` (satir 1856) fonksiyonlarina `_borsa_veri_kaydet_son_halka_arz` cagrilari eklenir.
 
 ### 9.5 Adim 5 — Entegrasyon Testi
 
