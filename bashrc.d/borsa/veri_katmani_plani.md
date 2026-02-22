@@ -834,8 +834,10 @@ fi
 > Fonksiyon: `adaptor_halka_arz_liste()` — satir 1220
 
 ```bash
-# SIFIRLAMA — asagidaki satirdan HEMEN ONCE eklenir (satir 1272):
-#   while IFS= read -r blok; do
+# SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 1259):
+#   local satirlar=""
+# Bu pozisyon `if btnsubmit` kontrolunden ONCE oldugu icin,
+# hicbir arz yoksa bile array temizlenmis olur.
 _borsa_veri_sifirla_halka_arz_liste
 
 # DONGU ICINDE — asagidaki satirdan HEMEN SONRA eklenir (satir 1300):
@@ -854,8 +856,11 @@ Not: `arz_tip` ve `odeme` string degerlerdir, `_borsa_sayi_temizle` UYGULANMAZ. 
 > Fonksiyon: `adaptor_halka_arz_talepler()` — satir 1321
 
 ```bash
-# SIFIRLAMA — asagidaki satirdan HEMEN ONCE eklenir (satir 1366):
-#   while IFS= read -r blok; do
+# SIFIRLAMA — asagidaki satirdan HEMEN SONRA eklenir (satir 1353):
+#   local satirlar=""
+# Bu pozisyon "kayit bulunamadi" kontrolunden ONCE oldugu icin,
+# tablo bossa bile array temizlenmis olur. "kayit bulunamadi"
+# yolundaki return 0 sifirlanmis (bos) array ile doner.
 _borsa_veri_sifirla_halka_arz_talepler
 
 # DONGU ICINDE — asagidaki satirdan HEMEN SONRA eklenir (satir 1395):
