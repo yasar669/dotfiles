@@ -1677,19 +1677,61 @@ borsa() {
             adaptor_giris "${giris_args[@]}"
             local giris_sonuc=$?
 
-            if [[ $giris_sonuc -eq 0 ]] && [[ $oturum_koru -eq 1 ]]; then
+            if [[ $giris_sonuc -eq 0 ]]; then
                 local hesap="${giris_args[0]}"
-                cekirdek_oturum_koruma_baslat "$kurum" "$hesap" "giris"
+                # Veritabanina oturum log yaz
+                if declare -f vt_oturum_log_yaz > /dev/null 2>&1; then
+                    vt_oturum_log_yaz "$kurum" "$hesap" "GIRIS"
+                fi
+                if [[ $oturum_koru -eq 1 ]]; then
+                    cekirdek_oturum_koruma_baslat "$kurum" "$hesap" "giris"
+                fi
             fi
             ;;
         bakiye)
             adaptor_bakiye "$@"
+            # Veritabanina bakiye kaydet
+            if declare -f vt_bakiye_kaydet > /dev/null 2>&1; then
+                local _vt_hesap
+                _vt_hesap=$(cekirdek_aktif_hesap "$kurum")
+                vt_bakiye_kaydet "$kurum" "$_vt_hesap" \
+                    "${_BORSA_VERI_BAKIYE[nakit]:-}" \
+                    "${_BORSA_VERI_BAKIYE[hisse]:-}" \
+                    "${_BORSA_VERI_BAKIYE[toplam]:-}"
+            fi
             ;;
         emir)
+            # BIST pazar-emir turu uyumluluk kontrolu
+            if declare -f bist_pazar_emir_kontrol > /dev/null 2>&1; then
+                local _emir_fiyat="${4:-}"
+                local _emir_turu="LIMIT"
+                [[ "${_emir_fiyat,,}" == "piyasa" ]] && _emir_turu="PIYASA"
+                bist_pazar_emir_kontrol "YILDIZ" "$_emir_turu" "GUN" || return 1
+            fi
             adaptor_emir_gonder "$@"
+            # Veritabanina emir kaydet
+            if declare -f vt_emir_kaydet > /dev/null 2>&1; then
+                local _vt_hesap
+                _vt_hesap=$(cekirdek_aktif_hesap "$kurum")
+                vt_emir_kaydet "$kurum" "$_vt_hesap" \
+                    "${_BORSA_VERI_SON_EMIR[sembol]:-}" \
+                    "${_BORSA_VERI_SON_EMIR[yon]:-}" \
+                    "${_BORSA_VERI_SON_EMIR[lot]:-}" \
+                    "${_BORSA_VERI_SON_EMIR[fiyat]:-}" \
+                    "${_BORSA_VERI_SON_EMIR[referans]:-}" \
+                    "${_BORSA_VERI_SON_EMIR[basarili]:-0}"
+            fi
             ;;
         emirler)
             adaptor_emirleri_listele "$@"
+            # Veritabanindaki emir durumlarini guncelle
+            if declare -f vt_emir_durum_guncelle > /dev/null 2>&1; then
+                local _vt_eid
+                for _vt_eid in "${_BORSA_VERI_EMIRLER[@]}"; do
+                    [[ -z "$_vt_eid" ]] && continue
+                    vt_emir_durum_guncelle "$_vt_eid" "${_BORSA_VERI_EMIR_DURUM[$_vt_eid]:-}"
+                done
+            fi
             ;;
         iptal)
             adaptor_emir_iptal "$@"
@@ -1697,6 +1739,22 @@ borsa() {
         portfoy)
             if declare -f adaptor_portfoy > /dev/null; then
                 adaptor_portfoy "$@"
+                # Veritabanina pozisyonlari kaydet
+                if declare -f vt_pozisyon_kaydet > /dev/null 2>&1; then
+                    local _vt_hesap _vt_smb
+                    _vt_hesap=$(cekirdek_aktif_hesap "$kurum")
+                    for _vt_smb in "${_BORSA_VERI_SEMBOLLER[@]}"; do
+                        [[ -z "$_vt_smb" ]] && continue
+                        vt_pozisyon_kaydet "$kurum" "$_vt_hesap" \
+                            "$_vt_smb" \
+                            "${_BORSA_VERI_HISSE_LOT[$_vt_smb]:-}" \
+                            "${_BORSA_VERI_HISSE_MALIYET[$_vt_smb]:-}" \
+                            "${_BORSA_VERI_HISSE_FIYAT[$_vt_smb]:-}" \
+                            "${_BORSA_VERI_HISSE_DEGER[$_vt_smb]:-}" \
+                            "${_BORSA_VERI_HISSE_KAR[$_vt_smb]:-}" \
+                            "${_BORSA_VERI_HISSE_KAR_YUZDE[$_vt_smb]:-}"
+                    done
+                fi
             else
                 echo "HATA: '$kurum' surucusu 'portfoy' komutunu desteklemiyor."
                 return 1
@@ -1725,6 +1783,19 @@ borsa() {
                 talep)
                     if declare -f adaptor_halka_arz_talep > /dev/null; then
                         adaptor_halka_arz_talep "$@"
+                        # Veritabanina halka arz talebi kaydet
+                        if declare -f vt_halka_arz_kaydet > /dev/null 2>&1; then
+                            local _vt_hesap
+                            _vt_hesap=$(cekirdek_aktif_hesap "$kurum")
+                            vt_halka_arz_kaydet "$kurum" "$_vt_hesap" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[islem]:-talep}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[basarili]:-0}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[ipo_adi]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[ipo_id]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[lot]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[fiyat]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[mesaj]:-}"
+                        fi
                     else
                         echo "HATA: '$kurum' surucusu 'arz talep' komutunu desteklemiyor."
                         return 1
@@ -1733,6 +1804,19 @@ borsa() {
                 iptal)
                     if declare -f adaptor_halka_arz_iptal > /dev/null; then
                         adaptor_halka_arz_iptal "$@"
+                        # Veritabanina halka arz iptali kaydet
+                        if declare -f vt_halka_arz_kaydet > /dev/null 2>&1; then
+                            local _vt_hesap
+                            _vt_hesap=$(cekirdek_aktif_hesap "$kurum")
+                            vt_halka_arz_kaydet "$kurum" "$_vt_hesap" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[islem]:-iptal}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[basarili]:-0}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[ipo_adi]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[ipo_id]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[lot]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[fiyat]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[mesaj]:-}"
+                        fi
                     else
                         echo "HATA: '$kurum' surucusu 'arz iptal' komutunu desteklemiyor."
                         return 1
@@ -1741,6 +1825,19 @@ borsa() {
                 guncelle)
                     if declare -f adaptor_halka_arz_guncelle > /dev/null; then
                         adaptor_halka_arz_guncelle "$@"
+                        # Veritabanina halka arz guncellemesi kaydet
+                        if declare -f vt_halka_arz_kaydet > /dev/null 2>&1; then
+                            local _vt_hesap
+                            _vt_hesap=$(cekirdek_aktif_hesap "$kurum")
+                            vt_halka_arz_kaydet "$kurum" "$_vt_hesap" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[islem]:-guncelle}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[basarili]:-0}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[ipo_adi]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[ipo_id]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[lot]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[fiyat]:-}" \
+                                "${_BORSA_VERI_SON_HALKA_ARZ[mesaj]:-}"
+                        fi
                     else
                         echo "HATA: '$kurum' surucusu 'arz guncelle' komutunu desteklemiyor."
                         return 1
