@@ -11,22 +11,22 @@ Sistem bes katmandan olusur. Her katman sadece bir altindaki katmanla konusur, k
 
 ```
 +-----------------------------------------------+    +---------------------------+
-|  5. ROBOT MOTORU (robot/motor.sh)             |    |  SUPABASE VERITABANI      |
+|  5. ROBOT MOTORU (robot/motor.sh)             |    |  YEREL SUPABASE           |
 |     Strateji calistirir, sinyal dinler,       |    |  (veritabani/supabase.sh) |
 |     emir tetikler, oturum koruma baslatir      |    |                           |
-+-----------------------------------------------+    |  Kalici kayit servisi:    |
-|  4. STRATEJI (strateji/*.sh)                  |    |  - Emir gecmisi           |
-|     Alis/satis karari verir, sinyal uretir    |    |  - Bakiye anliklari       |
-+-----------------------------------------------+    |  - Pozisyon izleme        |
-|  3. TARAMA + VERI KAYNAGI (tarama/*.sh)       |    |  - K/Z takibi             |
-|     Merkezi veri kaynagi yonetimi,            |    |  - Halka arz islemleri    |
-|     onbellek, failover, fiyat/hacim toplama   |    |  - Robot log              |
++-----------------------------------------------+    |  Docker ile localhost'ta  |
+|  4. STRATEJI (strateji/*.sh)                  |    |  calisan PostgreSQL +     |
+|     Alis/satis karari verir, sinyal uretir    |    |  PostgREST + GoTrue +     |
++-----------------------------------------------+    |  Kong API Gateway         |
+|  3. TARAMA + VERI KAYNAGI (tarama/*.sh)       |    |                           |
+|     Merkezi veri kaynagi yonetimi,            |    |  Kalici kayit servisi:    |
+|     onbellek, failover, fiyat/hacim toplama   |    |  - Emir gecmisi           |
++-----------------------------------------------+    |  - Bakiye anliklari       |
+|  2. ADAPTOR (adaptorler/*.sh)                 |<-->|  - Pozisyon izleme        |
+|     Kuruma ozgu HTTP islemleri, parse, emir   |    |  - K/Z takibi             |
 +-----------------------------------------------+    |                           |
-|  2. ADAPTOR (adaptorler/*.sh)                 |<-->|  curl ile REST API        |
-|     Kuruma ozgu HTTP islemleri, parse, emir   |    |  (PostgREST)              |
-+-----------------------------------------------+    |                           |
-|  1. CEKIRDEK (cekirdek.sh + kurallar/*.sh)    |<-->|  vt_* fonksiyonlari       |
-|     HTTP, oturum dizini, BIST kurallari       |    |  cekirdekten cagrilir     |
+|  1. CEKIRDEK (cekirdek.sh + kurallar/*.sh)    |<-->|  curl localhost:8000      |
+|     HTTP, oturum dizini, BIST kurallari       |    |  vt_* fonksiyonlari       |
 +-----------------------------------------------+    +---------------------------+
 ```
 
@@ -65,8 +65,12 @@ bashrc.d/borsa/
   robot/
     (henuz yok)              # Katman 5: Otomasyon motoru
   veritabani/
+    docker-compose.yml       # Supabase Docker Compose (projenin icinde, tak-calistir)
+    .env.ornek               # Ornek ayarlar (git'e girer, sifre icermez)
+    .env                     # Gercek ayarlar (git'e GIRMEZ, .gitignore)
+    sema.sql                 # Tum tablo tanimlari (CREATE TABLE IF NOT EXISTS)
     supabase.sh              # Veritabani servisi: baglanti, CRUD, sema
-    supabase.ayarlar.sh      # Proje URL, API anahtari, tablo isimleri
+    supabase.ayarlar.sh      # Baglanti bilgileri (git'e GIRMEZ, .gitignore)
 ```
 
 ## 4. Algoritmik Islem Dongusu
@@ -464,12 +468,16 @@ veri_kaynagi_goster                   # aktif veri kaynagini goster
 
 Manuel secim otomatik secimin onune gecer.
 
-### 9.3 Veri Onbellegi (Cache)
+### 9.3 Veri Depolama: Iki Katmanli Yapi
+
+Fiyat verileri iki katmanda saklanir: kisa sureli onbellek (hiz) ve kalici gecmis (analiz).
+
+#### 9.3.1 Katman 1: Kisa Sureli Onbellek (Dosya)
 
 Ayni anda 5 robot calisiyor ve hepsi THYAO fiyatini soruyor.
 Her sorguda sunucuya HTTP istegi atmak gereksizdir cunku fiyat saniyeler icinde degismez.
 
-Cozum: Veri onbellegi. Tarama katmani son cekilen veriyi kisa sureligine saklar.
+Cozum: Tarama katmani son cekilen veriyi kisa sureligine dosyaya saklar.
 
 ```
 [ONBELLEK AKISI]
@@ -483,7 +491,7 @@ Cozum: Veri onbellegi. Tarama katmani son cekilen veriyi kisa sureligine saklar.
 
   Robot 1: veri_kaynagi_fiyat_al("THYAO")  (12 saniye sonra)
     +-> Onbellekte var mi? Evet ama 12 saniye gecmis (esik: 10 sn)
-    |     -> sunucudan taze cek, onbellegi guncelle
+    |     -> sunucudan taze cek, onbellegi guncelle, Supabase'e kaydet
 ```
 
 Onbellek dosya tabanlidir (RAM'de degil) cunku robotlar ayri proseslerdir:
@@ -500,6 +508,53 @@ Onbellek suresi ayarlanabilirdir:
 _VERI_ONBELLEK_SURESI=10     # saniye (varsayilan)
 ```
 
+Bu katman yalnizca hiz icindir. Veri gecicidir, bilgisayar kapaninca silinir.
+
+#### 9.3.2 Katman 2: Kalici Fiyat Gecmisi (Supabase)
+
+Her taze fiyat cekiminde (onbellek eski veya bos oldugunda) veri ayni zamanda
+Supabase'e de yazilir. Boylece tum fiyat gecmisi kalici olarak saklanir.
+
+```
+[KALICI KAYIT AKISI]
+  veri_kaynagi_fiyat_al("THYAO")
+    +-> Onbellek eski -> sunucudan taze cek
+    +-> Dosya onbellege yaz (hiz katmani)        <- gecici
+    +-> vt_fiyat_kaydet("THYAO", ...)             <- kalici (Supabase)
+         |                                        
+         +-> curl -s -X POST http://localhost:8001/rest/v1/fiyat_gecmisi
+               -d '{"sembol":"THYAO","fiyat":312.50,...}'
+         +-> Basarisiz olursa islem engellenmez (hata toleransi)
+```
+
+Bu katmanin sagladigi avantajlar:
+
+| Avantaj | Aciklama |
+|---------|----------|
+| Gecmis analiz | "THYAO son 30 gunde ne yapti?" sorusuna SQL ile cevap |
+| Strateji gelistirme | Gecmis veriler uzerinden strateji test etme (backtesting) |
+| Grafik ve raporlama | Supabase Studio'dan gorsel analiz |
+| Robotlar arasi tutarlilik | Tum robotlar ayni tablodan okuyabilir |
+| Veri madenciligi | Hacim, fiyat korelasyonu gibi ileri analizler |
+
+#### 9.3.3 Iki Katmanin Birlikte Calismasi
+
+```
+[FIYAT ISTEGI]
+  Robot -> veri_kaynagi_fiyat_al("THYAO")
+           |
+           +-> [1] Dosya onbellek kontrol (/tmp/borsa/_veri_onbellek/THYAO.dat)
+           |     Taze (< 10 sn) -> onbellekten dondur, Supabase'e yazma
+           |     Eski veya yok ->
+           |       +-> [2] Kurumdan taze fiyat cek (adaptor_hisse_bilgi_al)
+           |       +-> [3] Dosya onbellege yaz (gecici, hiz icin)
+           |       +-> [4] vt_fiyat_kaydet (kalici, Supabase'e)
+           |       +-> [5] Robota dondur
+```
+
+Onemli: Supabase'e yazma sadece taze cekim aninda yapilir. Onbellekten
+okunan tekrar isteklerde DB'ye yazilmaz (ayni veriyi tekrar yazmak gereksiz).
+
 ### 9.4 Veri Kaynagi ile Adaptor Arasindaki Iliski
 
 Veri kaynaginin bir adaptoru vardir. Tarama katmani bu adaptoru soyutlar.
@@ -510,13 +565,14 @@ Robot: "THYAO fiyatini ver"
   |
   +-> Tarama katmani: veri_kaynagi_fiyat_al("THYAO")
         |
-        +-> Onbellek kontrol -> yok veya eski
+        +-> Dosya onbellek kontrol -> yok veya eski
         +-> _VERI_KAYNAGI_KURUM = "ziraat"
         +-> _VERI_KAYNAGI_HESAP = "111111"
         +-> source adaptorler/ziraat.sh
         +-> adaptor_hisse_bilgi_al "THYAO"  (ziraat/111111 cookie ile)
         +-> Sonuc: "312.50  343.75  281.25  1.34  Surekli Islem"
-        +-> Onbellege yaz
+        +-> Dosya onbellege yaz (gecici, hiz icin)
+        +-> vt_fiyat_kaydet("THYAO", ...) (kalici, Supabase'e)
         +-> Robota dondur
 ```
 
@@ -532,6 +588,7 @@ Robot sadece `veri_kaynagi_fiyat_al("THYAO")` cagirir. Gerisini bilmez.
 | veri_kaynagi_goster | Tarama | Aktif kaynagi ve yedekleri goster |
 | veri_kaynagi_fiyat_al | Tarama | Sembol fiyat verisi (onbellekli) |
 | veri_kaynagi_fiyatlar_al | Tarama | Birden fazla sembol (toplu sorgu) |
+| veri_kaynagi_gecmis_al | Tarama | Belirli sembolun gecmis fiyatlarini Supabase'den getirir |
 | _veri_onbellek_oku | Tarama | Dosyadan onbellek oku |
 | _veri_onbellek_yaz | Tarama | Dosyaya onbellek yaz |
 | _veri_failover | Tarama | Kaynak dusunce yedege gec |
@@ -657,7 +714,11 @@ MKK (Merkezi Kayit Kurulusu) duzeyinde izleme icin her alim/satim KAYIT ALTINDA
 olmalidir. Istisna yok, ``unuttum`` yok. Bakiye her zaman mutabik, pozisyon her
 zaman takipli.
 
-### 11.2 Neden Supabase
+### 11.2 Neden Supabase (Yerel Kurulum)
+
+Supabase acik kaynakli bir projedir. Bulut hizmeti olarak da sunulur ama biz
+bulut KULLANMIYORUZ. Supabase'i kendi bilgisayarimizda Docker ile calistiriyoruz.
+Veri disariya cikmaz, internet gerekmez, sinir yok, ucret yok.
 
 Supabase, PostgreSQL veritabani uzerine otomatik REST API sunar (PostgREST).
 Bu demek ki veritabanina erismek icin sadece `curl` yeterlidir.
@@ -665,15 +726,90 @@ Yeni dil, yeni bagimlili, yeni calisma ortami gerekmez.
 
 ```
 Mevcut:   curl -> araci kurum sunucusu (Ziraat, Garanti vb)
-Yeni:     curl -> Supabase REST API (ayni mekanizma)
+Yeni:     curl -> localhost:8000/rest/v1/... (ayni mekanizma, yerel)
 ```
 
 Secim nedenleri:
 - Mevcut mimariyle %100 uyumlu: Bash + curl.
 - PostgreSQL guclu, ACID uyumlu, iliskisel veritabani.
 - Row Level Security (RLS) ile guvenlik.
-- Bulut tabanli — sunucu yonetimi gerekmez.
-- Ucretsiz katman yeterli (500 MB, 50.000 satir/ay).
+- Tamamen yerel: veri bilgisayardan cikmaz, internet gerekmez.
+- Sifir gecikme: localhost uzerinden ~1-5ms.
+- Sifir maliyet: sinir yok, istedigin kadar satir.
+- Docker ile tek komutla baslar, tek komutla durur.
+- Baska bir projede zaten kullaniliyor, altyapi hazir.
+
+#### 11.2.1 Yerel Supabase Mimarisi
+
+Supabase Docker Compose ile su bilesenleri calistirir:
+
+```
++----------------------------------+
+|  Kong API Gateway (:8000)        |  <- curl istekleri buraya gelir
+|    |                             |
+|    +-> PostgREST (:3000)         |  <- SQL'e REST API olarak cevirir
+|    +-> GoTrue (:9999)            |  <- kimlik dogrulama (opsiyonel)
+|    +-> Realtime (:4000)          |  <- canli dinleme (ileride kullanilabilir)
+|    +-> Storage (:5000)           |  <- dosya depolama (kullanmiyoruz)
+|    |                             |
+|  PostgreSQL (:5432)              |  <- asil veritabani
+|  Supabase Studio (:3001)         |  <- web arayuzu (tablo yonetimi)
++----------------------------------+
+```
+
+Biz sadece su bilesenleri aktif kullaniyoruz:
+- PostgreSQL: veritabani motoru
+- PostgREST: REST API (curl ile erisim)
+- Kong: API Gateway (tek giris noktasi)
+- Studio: tablo olusturma ve veri inceleme (opsiyonel, tarayicidan)
+
+Su an aktif kullanmadigimiz bilesenler (Docker'da calisir ama biz istek atmayiz):
+- GoTrue (kimlik dogrulama - tek kullanici oldugumuz icin gereksiz)
+- Realtime (canli bildirim - su an Bash'ten kullanilmiyor. Ileride Python veya
+  JavaScript istemci ile canli fiyat akisi dinleme yapilabilir. PostgreSQL
+  tarafinda fiyat_gecmisi tablosuna INSERT yapildiginda Realtime otomatik
+  olarak yayin yapar, ek bir ayar gerektirmez.)
+- Storage (dosya depolama - ihtiyacimiz yok)
+
+#### 11.2.2 Kurulum: Tak-Calistir Yaklasimi
+
+Supabase'in tum reposunu (500 MB) klonlamaya gerek yok. Calistirmak icin sadece
+`docker-compose.yml` ve `.env` dosyasi yeterli. Bu dosyalar dogrudan bu projenin
+icinde `veritabani/` klasorunde bulunur.
+
+Bu sayede dotfiles reposunu herhangi bir Linux makineye klonlayip 3 komutla
+her seyi calistirmak mumkundur:
+
+```bash
+# Yeni makine - ilk kurulum:
+git clone <dotfiles-repo>
+cd dotfiles/bashrc.d/borsa/veritabani
+cp .env.ornek .env          # ayarlari kopyala (bir kez)
+docker compose up -d         # Supabase baslar, eksik image'lar otomatik iner
+
+# Artik calisiyor:
+curl http://localhost:8001/rest/v1/   # REST API hazir
+# Tarayicida: http://localhost:3002   # Studio hazir
+```
+
+Gunluk kullanim:
+
+```bash
+# Supabase baslat (bilgisayar acildiginda):
+cd ~/dotfiles/bashrc.d/borsa/veritabani && docker compose up -d
+
+# Supabase durdur (veri KORUNUR):
+cd ~/dotfiles/bashrc.d/borsa/veritabani && docker compose stop
+
+# Tamamen sil (veri dahil):
+cd ~/dotfiles/bashrc.d/borsa/veritabani && docker compose down -v
+```
+
+Neden projenin icinde:
+- Tek repo, tek clone. Baska bir yere git clone gerekmez.
+- docker-compose.yml 50 KB — repo boyutunu etkilemez.
+- .env.ornek git'e girer (sifre icermez), .env git'e girmez (.gitignore).
+- Yeni makinede cp .env.ornek .env + docker compose up -d = calisiyor.
 
 ### 11.3 Veritabani Erisim Mekanizmasi
 
@@ -687,7 +823,7 @@ uzerinden yapilir. Hicbir katman dogrudan curl ile Supabase'e istek atmaz.
     +-> _BORSA_VERI_SON_EMIR array'ine kaydet    (anlik, proses-ici)
     +-> vt_emir_kaydet(...)                       (kalici, Supabase'e)
          |
-         +-> curl -s -X POST .../rest/v1/emirler
+         +-> curl -s -X POST http://localhost:8001/rest/v1/emirler
                -H "apikey: $SUPABASE_ANAHTAR"
                -H "Content-Type: application/json"
                -d '{"sembol":"THYAO","yon":"ALIS",...}'
@@ -699,7 +835,7 @@ uzerinden yapilir. Hicbir katman dogrudan curl ile Supabase'e istek atmaz.
 [OKUMA AKISI]
   vt_bakiye_gecmisi("ziraat", "111111", 30)
     |
-    +-> curl -s .../rest/v1/bakiye_gecmisi
+    +-> curl -s http://localhost:8001/rest/v1/bakiye_gecmisi
           ?kurum=eq.ziraat&hesap=eq.111111
           &order=zaman.desc&limit=30
     +-> JSON yanit parse et (jq ile)
@@ -708,21 +844,44 @@ uzerinden yapilir. Hicbir katman dogrudan curl ile Supabase'e istek atmaz.
 
 ### 11.4 Baglanti Ayarlari
 
-Supabase erisim bilgileri `veritabani/supabase.ayarlar.sh` dosyasinda saklanir.
+Yerel Supabase erisim bilgileri `veritabani/supabase.ayarlar.sh` dosyasinda saklanir.
 Bu dosya git'e EKLENMEZ (.gitignore). Her makinede yerel olarak olusturulur.
 
 ```bash
 # veritabani/supabase.ayarlar.sh
-_SUPABASE_URL="https://xxxxx.supabase.co"
-_SUPABASE_ANAHTAR="eyJhbGc..."     # anon/public key (RLS ile korunur)
-_SUPABASE_SERVIS_ANAHTAR=""        # bos birak, kullanilmaz
+_SUPABASE_URL="http://localhost:8001"   # Kong API Gateway (yerel, port 8001)
+_SUPABASE_ANAHTAR="eyJhbGc..."          # anon key (.env dosyasindan)
+_SUPABASE_SERVIS_ANAHTAR=""             # bos birak, kullanilmaz
 ```
 
+Not: `_SUPABASE_ANAHTAR` degeri ayni klasordeki `.env` dosyasindaki `ANON_KEY` ile
+ayni olmalidir. Bu anahtar JWT formatindadir ve PostgREST tarafindan dogrulanir.
+
 Guvenlik:
+- Tamamen yerel: disaridan erisim yok, veri bilgisayardan cikmaz.
 - Sadece `anon` anahtar kullanilir, `service_role` KULLANILMAZ.
-- RLS politikalari tum tablolarda aktiftir.
-- `.gitignore` dosyasinda `supabase.ayarlar.sh` satirı bulunur.
+- RLS politikalari tum tablolarda aktiftir (tek kullanici olsak bile).
+- `.gitignore` dosyasinda `supabase.ayarlar.sh` satiri bulunur.
 - Dosya izinleri `chmod 600` ile korunur.
+- Docker agı sadece localhost'a baglidir, dis ag erisimi kapatilir.
+
+#### 11.4.1 Supabase Saglik Kontrolu
+
+Veritabani islemleri oncesinde Supabase'in calisip calismadigini kontrol eder:
+
+```bash
+vt_baglanti_kontrol()
+  +-> curl -sf http://localhost:8001/rest/v1/ > /dev/null
+  |     Basarili -> return 0
+  |     Basarisiz ->
+  |       +-> Docker container'lari kontrol et
+  |       +-> Kapaliysa uyari: "Supabase calismyor. Baslatmak icin:"
+  |       +->   "cd $(dirname $0)/veritabani && docker compose up -d"
+  |       +-> return 1
+```
+
+Robot baslangicinda ve periyodik olarak cagrilir.
+Supabase kapaliysa islem engellenmez, sadece DB yazimi atlanir.
 
 ### 11.5 Veritabani Semasi (Tablo Yapilari)
 
@@ -833,6 +992,50 @@ oturum_log tablosu:
   zaman           TIMESTAMPTZ  DEFAULT NOW()
 ```
 
+#### 11.5.7 fiyat_gecmisi
+
+Tarama katmanindan cekilen fiyat verilerinin kalici kaydini tutar.
+Her taze cekim aninda (onbellek eski veya bos oldugunda) bir satir eklenir.
+Strateji gelistirme, backtesting ve gecmis analiz icin kullanilir.
+
+```
+fiyat_gecmisi tablosu:
+  id              BIGINT       PRIMARY KEY (otomatik)
+  sembol          TEXT         NOT NULL    (THYAO, AKBNK vb)
+  fiyat           NUMERIC(12,4) NOT NULL   (son islem fiyati)
+  tavan           NUMERIC(12,4)            (gunluk tavan fiyat)
+  taban           NUMERIC(12,4)            (gunluk taban fiyat)
+  degisim         NUMERIC(8,4)             (gunluk degisim yuzdesi)
+  hacim           BIGINT                   (islem hacmi, lot)
+  seans_durumu    TEXT                     (Surekli Islem, Kapali, Tek Fiyat vb)
+  kaynak_kurum    TEXT                     (veriyi hangi kurum oturumundan aldik)
+  kaynak_hesap    TEXT                     (hangi hesap oturumundan aldik)
+  zaman           TIMESTAMPTZ  DEFAULT NOW()
+```
+
+Ornek sorgular:
+
+```sql
+-- THYAO son 30 gunluk kapanislar
+SELECT sembol, fiyat, zaman FROM fiyat_gecmisi
+  WHERE sembol = 'THYAO'
+  ORDER BY zaman DESC LIMIT 30;
+
+-- Bugunun tum fiyat hareketleri
+SELECT sembol, fiyat, degisim, hacim, zaman FROM fiyat_gecmisi
+  WHERE zaman::date = CURRENT_DATE
+  ORDER BY zaman;
+
+-- En cok islem goren semboller (bugun)
+SELECT sembol, MAX(hacim) as maks_hacim FROM fiyat_gecmisi
+  WHERE zaman::date = CURRENT_DATE
+  GROUP BY sembol ORDER BY maks_hacim DESC LIMIT 10;
+```
+
+Not: Bu tablo zamanla buyuyebilir. Gunluk ortalama 50 sembol x 6 saat x
+6 cekim/saat = ~1800 satir/gun. Yillik ~450.000 satir — PostgreSQL icin
+cok kucuk bir boyut.
+
 ### 11.6 Veritabani Fonksiyonlari
 
 Tum fonksiyonlar `veritabani/supabase.sh` icerisinde tanimlanir.
@@ -856,6 +1059,7 @@ Tum fonksiyonlar `veritabani/supabase.sh` icerisinde tanimlanir.
 | vt_halka_arz_kaydet | adaptor_halka_arz_talep/iptal/guncelle sonrasi | Halka arz islemini kaydeder |
 | vt_robot_log_yaz | robot_baslat/durdur, emir, hata anlarinda | Robot olayini loglar |
 | vt_oturum_log_yaz | adaptor_giris, adaptor_oturum_uzat, dusme anlarinda | Oturum olayini loglar |
+| vt_fiyat_kaydet | veri_kaynagi_fiyat_al taze cekim aninda | Fiyat verisini fiyat_gecmisi tablosuna yazar |
 
 #### 11.6.3 Okuma Fonksiyonlari
 
@@ -866,6 +1070,8 @@ Tum fonksiyonlar `veritabani/supabase.sh` icerisinde tanimlanir.
 | vt_pozisyon_gecmisi | Belirli sembol ve hesap icin pozisyon degisimlerini getirir |
 | vt_gun_sonu_rapor | Gunun tum islemlerini ozetler |
 | vt_kar_zarar_rapor | Belirli donem icin toplam K/Z hesaplar |
+| vt_fiyat_gecmisi | Belirli sembol ve donem icin fiyat gecmisini getirir |
+| vt_fiyat_istatistik | Belirli sembol icin ort/min/maks/hacim istatistikleri |
 
 ### 11.7 Tetik Noktalari: Ne Zaman Yazilir
 
@@ -1092,12 +1298,15 @@ veri_katmani_plani.md'deki tum declare -gA tanimlari ve yardimci
 fonksiyonlar cekirdek'e eklenir. Adaptor fonksiyonlarina array
 kaydi eklenir. Mevcut echo ciktilari degismez.
 
-### 12.3 Asama 3 - Veritabani Altyapisi (Supabase)
+### 12.3 Asama 3 - Veritabani Altyapisi (Yerel Supabase)
 
-veritabani/ klasoru olusturulur.
+veritabani/ klasorune docker-compose.yml ve .env.ornek dosyalari eklenir.
+Supabase resmi docker-compose.yml'den sadeletirilir (portlar 8001/5433/3002).
+.env.ornek icinde varsayilan JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY bulunur.
+.gitignore'a .env ve supabase.ayarlar.sh eklenir.
 supabase.sh ve supabase.ayarlar.sh dosyalari yazilir.
-Supabase projesinde tablolar olusturulur (SQL).
-vt_istek_at, vt_baglanti_kontrol, _vt_json_olustur yazilir.
+Yerel Supabase'de tablolar olusturulur (Studio veya SQL ile).
+vt_istek_at (localhost:8001'e curl), vt_baglanti_kontrol, _vt_json_olustur yazilir.
 jq bagimliliginin varligi kontrol edilir.
 Hata toleransi ve yerel yedek mekanizmasi yazilir.
 
@@ -1120,9 +1329,12 @@ borsa ziraat fiyat SEMBOL komutu eklenir.
 
 tarama/ klasoru olusturulur.
 Veri kaynagi secim algoritmasi yazilir (otomatik + manuel).
-Onbellek mekanizmasi yazilir (dosya tabanli).
+Iki katmanli veri depolama yazilir:
+  - Dosya onbellek: /tmp/borsa/_veri_onbellek/ (gecici, hiz icin).
+  - Kalici gecmis: vt_fiyat_kaydet ile fiyat_gecmisi tablosuna yazma.
 Failover mekanizmasi yazilir (otomatik yedege gecis).
 Veri kaynagi oturum koruma dongusu yazilir.
+vt_fiyat_gecmisi ve vt_fiyat_istatistik okuma fonksiyonlari yazilir.
 
 ### 12.7 Asama 7 - Robot Motoru
 
@@ -1153,3 +1365,586 @@ Tab tamamlama guncellenir.
 Robottan bagimsiz, kurumsuz ust seviye fonksiyonlar eklenir.
 emir_gonder, bakiye_sorgula gibi fonksiyonlar robot_baslat ile kilitli kurumu kullanir.
 Bu fonksiyonlar strateji katmanindan cagrilir.
+
+### 12.11 Asama 11 - Otomatik Kurulum Betigi
+
+kur.sh dosyasi repo kokune yazilir.
+Bolum 13'teki tasarima uygun olarak tum adimlar tek betikle calistirilir.
+Her adim bagimsizdik kontrolu yapar, eksik olanlar kurulur veya uyari verilir.
+Idempotent calisir: tekrar calistirildiginda zaten yapilmis adimlari atlar.
+Test icin temiz bir Docker konteynerinde veya sanal makinede dogrulanir.
+
+## 13. Otomatik Kurulum Sistemi
+
+Repo baska bir makineye klonlandiginda tek bir komutla her seyin hazir hale gelmesi hedeflenir.
+Kullanici repoyu klonlar, `bash kur.sh && source ~/.bashrc` calistirir — sistem hazirdir.
+Terminal kapatip acmaya gerek yoktur. `&&` sayesinde kurulum basarili oldugunda
+`source` komutu ayni kabukta calisir ve tum fonksiyonlar aninda aktif olur.
+
+### 13.1 Genel Akis
+
+```
+git clone <repo> ~/dotfiles
+cd ~/dotfiles
+bash kur.sh && source ~/.bashrc
+# Hazir.
+```
+
+Betik asagidaki adimlari sirayla calistirir.
+Her adim basinda kontrol yapar: zaten yapilmissa atlar, eksikse yapar.
+Betik idempotent calisir — tekrar calistirmak guvenlidir.
+
+### 13.2 Adimlar
+
+#### 13.2.1 Sistem Bagimliliklari
+
+Gerekli komut satiri araclari kontrol edilir, eksik olanlar icin uyari verilir.
+
+| Bagimlilik      | Zorunluluk | Aciklama                              |
+|-----------------|------------|---------------------------------------|
+| git             | Zorunlu    | Repo yonetimi                         |
+| curl            | Zorunlu    | HTTP istekleri (borsa + supabase)      |
+| jq              | Zorunlu    | JSON parse (supabase + adaptor)        |
+| docker          | Opsiyonel  | Supabase icin gerekli                  |
+| docker compose  | Opsiyonel  | Supabase icin gerekli                  |
+| python3 (3.10+) | Opsiyonel  | MCP sunucusu icin gerekli              |
+
+Zorunlu bagimliliklar eksikse betik hata verir ve durur.
+Opsiyonel bagimliliklar eksikse uyari yazar ama devam eder.
+
+**Ornek kontrol mantigi:**
+
+```bash
+kontrol_et() {
+    local komut="$1"iz
+    if ! command -v "$komut" &>/dev/null; then
+        echo "HATA: '$komut' bulunamadi. Kurun: sudo apt install $komut"
+        return 1
+    fi
+}
+```
+
+#### 13.2.2 Dotfiles Dizin Baglantisi
+
+.bashrc icinde `DOTFILES_DIZIN="$HOME/dotfiles"` sabit kodlu oldugu icin
+repo `$HOME/dotfiles` konumunda olmalidir.
+
+- Repo zaten `$HOME/dotfiles` konumundaysa: islem yapma, atla.
+- Repo baska bir konumdaysa (orn: `~/Masaustu/dotfiles`):
+  `$HOME/dotfiles` olarak sembolik link olustur.
+- `$HOME/dotfiles` zaten varsa ve baska bir yere isaret ediyorsa:
+  uyari ver, kullanicidan teyit al.
+
+```bash
+# Sembolik link olusturma mantigi
+repo_dizin="$(cd "$(dirname "$0")" && pwd)"
+hedef="$HOME/dotfiles"
+if [ "$repo_dizin" != "$hedef" ]; then
+    ln -sfn "$repo_dizin" "$hedef"
+fi
+```
+
+#### 13.2.3 Bashrc Yukleme
+
+Mevcut `$HOME/.bashrc` dosyasi yedeklenir ve repo icindeki `.bashrc` ile degistirilir.
+
+- `$HOME/.bashrc` zaten repo dosyasiyla ayni icerikse: atla.
+- Farkliysa: `$HOME/.bashrc.yedek.TARIH` olarak yedekle, sonra kopyala.
+- Sembolik link yerine kopyalama tercih edilir (bazi sistemler login sirasinda
+  sembolik linki takip etmekte sorun yasayabilir).
+
+```bash
+if ! diff -q "$repo_dizin/.bashrc" "$HOME/.bashrc" &>/dev/null; then
+    cp "$HOME/.bashrc" "$HOME/.bashrc.yedek.$(date +%Y%m%d%H%M%S)"
+    cp "$repo_dizin/.bashrc" "$HOME/.bashrc"
+fi
+```
+
+#### 13.2.4 Python Ortami (MCP Sunucusu)
+
+MCP sunucusu Python 3.10+ ve `mcp[cli]` paketine ihtiyac duyar.
+
+- `python3 --version` kontrol edilir. 3.10'dan dusukse uyari verilir.
+- `bashrc.d/mcp_sunucular/.venv` klasoru yoksa olusturulur.
+- `.venv` icine `pip install -e .` ile bagimliliklar kurulur
+  (pyproject.toml dosyasi zaten mevcut).
+
+```bash
+mcp_dizin="$repo_dizin/bashrc.d/mcp_sunucular"
+if [ -f "$mcp_dizin/pyproject.toml" ] && command -v python3 &>/dev/null; then
+    if [ ! -d "$mcp_dizin/.venv" ]; then
+        python3 -m venv "$mcp_dizin/.venv"
+        "$mcp_dizin/.venv/bin/pip" install -e "$mcp_dizin"
+    fi
+fi
+```
+
+#### 13.2.5 Supabase Kurulumu
+
+veritabani/ klasoru varsa Supabase yerel kurulumu yapilir.
+
+- Docker ve Docker Compose kontrolu yapilir. Yoksa uyari verilir ve bu adim atlanir.
+- `.env` dosyasi yoksa `.env.ornek` kopyalanarak olusturulur.
+- `.env` dosyasi olusturuldugunda rastgele JWT_SECRET uretilir (openssl rand).
+- `docker compose up -d` calistirilarak konteynerler ayaga kaldirilir.
+- Konteynerlerin saglikli (healthy) olmasini bekler (maks 60 saniye).
+- PostgREST'e baglanti testi yapilir (curl localhost:8001).
+
+```bash
+vt_dizin="$repo_dizin/bashrc.d/borsa/veritabani"
+if [ -f "$vt_dizin/docker-compose.yml" ]; then
+    if command -v docker &>/dev/null && docker compose version &>/dev/null; then
+        if [ ! -f "$vt_dizin/.env" ]; then
+            cp "$vt_dizin/.env.ornek" "$vt_dizin/.env"
+            # Rastgele JWT secret uret
+            jwt_secret="$(openssl rand -base64 32)"
+            sed -i "s|JWT_SECRET=.*|JWT_SECRET=$jwt_secret|" "$vt_dizin/.env"
+        fi
+        cd "$vt_dizin" && docker compose up -d
+    else
+        echo "UYARI: Docker bulunamadi. Supabase kurulmadi."
+        echo "Supabase icin: sudo apt install docker.io docker-compose-v2"
+    fi
+fi
+```
+
+#### 13.2.6 Hassas Dosya Izinleri
+
+Sifre ve anahtar iceren dosyalar sadece sahibi tarafindan okunabilir olmalidir.
+
+```bash
+# 600 izni verilecek dosyalar
+hassas_dosyalar=(
+    "$vt_dizin/.env"
+    "$repo_dizin/bashrc.d/borsa/veritabani/supabase.ayarlar.sh"
+    "$repo_dizin/bashrc.d/borsa/adaptorler/ziraat.ayarlar.sh"
+)
+for dosya in "${hassas_dosyalar[@]}"; do
+    [ -f "$dosya" ] && chmod 600 "$dosya"
+done
+```
+
+#### 13.2.7 Gitignore Kontrolu
+
+`.gitignore` dosyasinda hassas dosyalarin listelendigini dogrular.
+
+Olmasi gereken satirlar:
+
+```
+.env
+*.ayarlar.sh
+```
+
+Eksik satirlar varsa otomatik olarak eklenir.
+
+#### 13.2.8 Dogrulama ve Ozet
+
+Betik sonunda tum adimlarin durumunu ozetleyen bir tablo yazdirir.
+
+```
+=== Kurulum Ozeti ===
+[TAMAM]  Sistem bagimliliklari (git, curl, jq)
+[TAMAM]  Dotfiles baglantisi ($HOME/dotfiles)
+[TAMAM]  Bashrc yuklendi
+[TAMAM]  Python ortami (.venv)
+[UYARI]  Supabase kurulmadi (Docker yok)
+[TAMAM]  Dosya izinleri ayarlandi
+[TAMAM]  Gitignore guncellendi
+
+Kurulum tamamlandi. "source ~/.bashrc" ile fonksiyonlar yukleniyor...
+```
+
+### 13.3 Tasarim Ilkeleri
+
+- **Idempotent**: Betik kac kere calistirilirsa calistirilsin sonuc aynidir.
+  Zaten yapilmis adimlar tekrar yapilmaz.
+- **Yumusak basarisizlik**: Opsiyonel adimlarin basarisizligi betigi durdurmaz.
+  Zorunlu adimlarin basarisizligi betigi durdurur.
+- **Sessiz varsayilan**: Betik varsayilan olarak sadece onemli mesajlari gosterir.
+  `-v` (verbose) parametresi ile her adimin detayi gosterilir.
+- **Kullanici teyidi**: Mevcut dosyalarin ustune yazma durumlarinda kullanicidan
+  teyit alinir. `-e` (evet-hepsine) parametresi ile teyitsiz calisir.
+- **Sifir bagimlilik**: kur.sh dosyasi sadece bash ve coreutils gerektirir.
+  Hicbir harici paket olmadan calisabilir (kontrol fonksiyonlari harici paket
+  gerektirmez, sadece kurulum asamalari gerektirir).
+
+### 13.4 Dosya Konumu
+
+```
+dotfiles/               # Repo koku
+  kur.sh                # Otomatik kurulum betigi
+  .bashrc               # Bash yapilandirmasi
+  .gitignore            # Git dislamalari
+  bashrc.d/             # Moduler yapilandirma dosyalari
+    ...
+```
+
+kur.sh repo kokunde bulunur ve `bash kur.sh` ile calistirilir.
+Betik kendi konumunu `$0` ile tespit eder, mutlak yol gerektirmez.
+
+## 14. Bilinen Sorunlar ve Riskler
+
+Bu bolum mevcut kod ile plan arasindaki uyumsuzluklari, eksik tanimlari ve
+kodlamaya baslandiginda hata cikarabilecek noktalari listeler.
+Her sorun oncelik seviyesine gore siniflandirilmistir.
+
+### 14.1 Kritik Sorunlar
+
+Kodlamaya baslanmadan once cozulmesi gereken sorunlar.
+Bu sorunlar cozulmezse sistem calisma zamaninda bozulur.
+
+#### 14.1.1 ADAPTOR_ADI readonly Carpmasi
+
+**Dosya:** adaptorler/ziraat.sh satir 10
+**Sorun:** `readonly ADAPTOR_ADI="ziraat"` ifadesi ilk source'da set ediliyor.
+`borsa()` fonksiyonu her cagrildiginda adaptor dosyasini tekrar source ediyor
+(cekirdek.sh satir 774). Eger kullanici ardisik iki farkli kurum cagirirsa:
+
+```
+borsa ziraat bakiye       # ADAPTOR_ADI="ziraat" readonly olarak set
+borsa garanti bakiye      # garanti.sh source edilir ama ADAPTOR_ADI readonly
+                          # "ziraat" olarak kalir, garanti ASLA atanamaz
+```
+
+**Etki:** Coklu kurum destegi tamamen bozulur. Ikinci kurum birinci kurumun
+kimligiyle calisir.
+
+**Cozum secenekleri:**
+1. `readonly` yerine normal degisken kullan (her source'da ustune yazilir).
+2. Adaptor fonksiyonlarini bir alt kabukta (subshell) calistir.
+3. Adaptor yukleme sirasinda onceki degiskenleri temizle (unset).
+
+**Hangi asamada cozulmeli:** Asama 1'den once (mevcut kodda zaten sorun).
+
+#### 14.1.2 Supabase JWT Token Uretimi
+
+**Dosya:** Bolum 13.2.5 (kur.sh Supabase kurulumu)
+**Sorun:** Plan sadece `JWT_SECRET` icin `openssl rand` ile rastgele deger
+uretiyor. Ancak `ANON_KEY` ve `SERVICE_ROLE_KEY` rastgele string degildir —
+bunlar `JWT_SECRET` ile **imzalanmis JWT tokenlaridir**.
+
+```
+JWT_SECRET  = rastgele string (openssl rand -base64 32)     <- dogru
+ANON_KEY    = JWT_SECRET ile imzalanmis, role=anon JWT       <- uretilmeli
+SERVICE_KEY = JWT_SECRET ile imzalanmis, role=service JWT    <- uretilmeli
+```
+
+Sadece JWT_SECRET degistirip ANON_KEY'i eski .env.ornek'ten kopyalamak
+PostgREST'in tum istekleri reddetmesine yol acar (imza dogrulanamaz).
+
+**Cozum secenekleri:**
+1. .env.ornek'teki JWT_SECRET, ANON_KEY ve SERVICE_KEY uyumlu olarak birakilir
+   (hepsi varsayilan deger). Guvenlik yerel oldugu icin kabul edilebilir.
+2. kur.sh icinde yeni JWT_SECRET uretilir ve bu secret ile yeni JWT tokenlar
+   olusturulur. Bunun icin `python3 -c "import jwt; ..."` veya baska bir
+   JWT araci gerekir — sifir bagimlilik ilkesiyle celisir.
+
+**Onerilen cozum:** Secenek 1. Yerel Supabase icin varsayilan anahtarlari
+oldugu gibi kullanmak guvenlidir cunku dis ag erisimi yoktur. .env.ornek
+icinde uyumlu uc deger sabit olarak bulunur, kur.sh bunlari kopyalar.
+
+**Hangi asamada cozulmeli:** Asama 3 (Veritabani Altyapisi).
+
+#### 14.1.3 SQL Migration Stratejisi Tanimlanmamis
+
+**Dosya:** Bolum 11.5 (tablo yapilari), Bolum 12.3 (yol haritasi)
+**Sorun:** Planda 7 tablo tanimlanmis ama su sorulara cevap yok:
+
+- Tablolar nasil olusturulacak? SQL dosyasi mi, Studio'dan manuel mi?
+- kur.sh tabloları otomatik olusturacak mi?
+- Tablo semasi degistiginde migration nasil yapilacak?
+- `veritabani/` klasorunde bir `sema.sql` dosyasi olmali.
+
+**Cozum:** veritabani/ klasorune `sema.sql` dosyasi eklenir. Tum CREATE TABLE
+ifadeleri bu dosyada bulunur. kur.sh Supabase ayaga kalktiktan sonra bu
+dosyayi PostgREST uzerinden veya dogrudan psql ile calistirir.
+
+```
+veritabani/
+  docker-compose.yml
+  .env.ornek
+  .env
+  sema.sql              # Tum tablo tanimlari (CREATE TABLE IF NOT EXISTS)
+  supabase.sh
+  supabase.ayarlar.sh
+```
+
+Migration icin basit yaklasim: `CREATE TABLE IF NOT EXISTS` kullanmak.
+Tablo zaten varsa atlar, yoksa olusturur. Kolon ekleme gibi degisiklikler
+icin ayri migration dosyalari yazilabilir (ileride).
+
+**Hangi asamada cozulmeli:** Asama 3 (Veritabani Altyapisi).
+
+#### 14.1.4 borsa() Fonksiyonuna Yeni Komut Yonlendirmesi
+
+**Dosya:** cekirdek.sh satir 635-834
+**Sorun:** Mevcut `borsa()` fonksiyonu her zaman `borsa <kurum> <komut>` seklinde
+kurum bekliyor. Plan su kurumsuz komutlari tanimliyor:
+
+```
+borsa gecmis emirler 10         # kurum yok, genel sorgu
+borsa mutabakat ziraat 111111   # kurum var ama farkli format
+borsa kurallar seans             # zaten calisiyor (kurallar ozel case)
+```
+
+`gecmis` ve `mutabakat` icin mevcut yonlendirme mantigi calismaz cunku
+bu kelimeleri kurum adi olarak yorumlar ve adaptor dosyasi arar.
+
+**Cozum:** `borsa()` fonksiyonunun basina kurumsuz komutlar icin on-kontrol
+eklenir (kurallar icin yapildigi gibi):
+
+```bash
+case "$kurum" in
+    kurallar) ... ;;        # zaten var
+    gecmis)   ... ;;        # YENi: vt_* fonksiyonlarini cagir
+    mutabakat) ... ;;       # YENi: vt_mutabakat_kontrol cagir
+    *) # normal kurum yonlendirmesi
+esac
+```
+
+**Hangi asamada cozulmeli:** Asama 9 (Veritabani Okuma ve Raporlama).
+
+### 14.2 Onemli Sorunlar
+
+Sistemin calismasini engellemez ama veri kaybi veya tutarsizliga yol acabilir.
+Ilgili asama kodlanirken cozulmesi gerekir.
+
+#### 14.2.1 Dosya Onbellek Yaris Kosulu (Race Condition)
+
+**Dosya:** Bolum 9.3.1 (dosya onbellegi)
+**Sorun:** 5 robot ayni anda THYAO fiyatini soruyor ve onbellek suresi dolmus.
+Hepsi ayni anda `/tmp/borsa/_veri_onbellek/THYAO.dat` dosyasina yazmayi deniyor.
+Yari-yazilmis dosyanin okunmasi bozuk veri dondurur.
+
+**Cozum:** `flock` (dosya kilidi) mekanizmasi kullanilir:
+
+```bash
+(
+    flock -n 200 || return 0   # kilit alinamadiysa onbellektekini kullan
+    # taze veri cek ve dosyaya yaz
+    echo "$epoch|$fiyat|$tavan|$taban|$degisim|$seans" > "$onbellek_dosyasi"
+) 200>"$onbellek_dosyasi.lock"
+```
+
+**Hangi asamada cozulmeli:** Asama 6 (Veri Kaynagi Altyapisi).
+
+#### 14.2.2 bist_pazar_emir_kontrol() Hic Cagrilmiyor
+
+**Dosya:** kurallar/bist.sh satir 938-975
+**Sorun:** YAKIN pazarinda PIYASA emri yasagi, KIE/GIE/TAR emir suresi yasagi,
+aciga satis yasagi gibi kurallar `bist_pazar_emir_kontrol()` fonksiyonunda
+tanimlanmis. Ancak `adaptor_emir_gonder()` sadece `bist_emir_dogrula()`
+cagiriyor — bu fonksiyon yalnizca fiyat adimi kontrolu yapiyor.
+
+Sonuc: YAKIN pazarindaki bir hisseye PIYASA emri gonderilebilir, sunucu
+reddedocektir ama kullaniciya onceden uyari verilmez.
+
+**Cozum:** `bist_emir_dogrula()` fonksiyonuna pazar kontrolu eklenir veya
+adaptor icinden ayrica `bist_pazar_emir_kontrol()` cagrilir.
+
+**Hangi asamada cozulmeli:** Asama 5 (Veri Cekme) ile birlikte.
+
+#### 14.2.3 Veritabani Tablolarinda Index Tanimlari Yok
+
+**Dosya:** Bolum 11.5 (tablo yapilari)
+**Sorun:** 7 tablonun semasi tanimlanmis ama hicbirinde index yok. Sik
+yapilacak sorgular icin index olmadan performans dusecek:
+
+```sql
+-- Bu sorgular index olmadan buyuk tablolarda yavaslar:
+WHERE sembol = 'THYAO' ORDER BY zaman DESC          -- fiyat_gecmisi
+WHERE kurum = 'ziraat' AND hesap = '111111'          -- emirler, bakiye_gecmisi
+WHERE referans_no = 'ABC123'                         -- emirler
+```
+
+**Cozum:** sema.sql dosyasina indexler eklenir:
+
+```sql
+CREATE INDEX idx_fiyat_gecmisi_sembol_zaman ON fiyat_gecmisi(sembol, zaman DESC);
+CREATE INDEX idx_emirler_kurum_hesap ON emirler(kurum, hesap);
+CREATE INDEX idx_emirler_referans ON emirler(referans_no);
+CREATE INDEX idx_bakiye_gecmisi_kurum_hesap ON bakiye_gecmisi(kurum, hesap, zaman DESC);
+CREATE INDEX idx_pozisyonlar_kurum_sembol ON pozisyonlar(kurum, hesap, sembol);
+```
+
+**Hangi asamada cozulmeli:** Asama 3 (sema.sql yazilirken).
+
+#### 14.2.4 Robot Sinyal Mekanizmasi Belirsiz
+
+**Dosya:** Bolum 9.6 (tam senaryo)
+**Sorun:** Veri kaynagi tamamen dusunce plan "Robotlara sinyal: VERI_YOK" diyor.
+Ama robotlar **ayri proseslerdir** — bir prosesin baska proseslere nasil
+sinyal gonderecebi tanimlanmamis.
+
+**Cozum secenekleri:**
+1. Dosya bayraklari: `/tmp/borsa/_veri_durum` dosyasina "YOK" yazilir,
+   robotlar her turda bu dosyayi kontrol eder.
+2. Unix sinyalleri: `kill -USR1 $robot_pid` ile robotlara bildirim.
+3. Named pipe (FIFO): Robotlar bir pipe'i dinler.
+
+**Onerilen cozum:** Dosya bayraklari (secenek 1). En basit, en guvenilir,
+Bash ile dogal uyumlu. Robotlar zaten her turda dosya okuyorlar (onbellek).
+
+**Hangi asamada cozulmeli:** Asama 6-7 (Veri Kaynagi + Robot Motoru).
+
+#### 14.2.5 supabase.ayarlar.sh Uretimi Tanimlanmamis
+
+**Dosya:** Bolum 11.4, Bolum 13.2.5
+**Sorun:** Plan `.env.ornek -> .env` kopyalamayi tanimliyor ama
+`supabase.ayarlar.sh` dosyasinin nasil uretilecebi belli degil. Icindeki
+`_SUPABASE_ANAHTAR` degeri `.env` dosyasindaki `ANON_KEY` ile ayni olmali.
+
+**Cozum:** kur.sh icinde `.env` dosyasi olusturulduktan sonra ayni dosyadan
+ANON_KEY okunup `supabase.ayarlar.sh` otomatik uretilir:
+
+```bash
+anon_key=$(grep "^ANON_KEY=" "$vt_dizin/.env" | cut -d= -f2)
+cat > "$vt_dizin/supabase.ayarlar.sh" << EOF
+# shellcheck shell=bash
+_SUPABASE_URL="http://localhost:8001"
+_SUPABASE_ANAHTAR="$anon_key"
+EOF
+chmod 600 "$vt_dizin/supabase.ayarlar.sh"
+```
+
+**Hangi asamada cozulmeli:** Asama 3 (Veritabani Altyapisi).
+
+#### 14.2.6 Strateji Arayuzu Belirsiz
+
+**Dosya:** Bolum 10.2, Bolum 12.8
+**Sorun:** Plan `strateji_baslat` ve `strateji_degerlendir` fonksiyonlarini
+anlatyor ama asagidaki sorulara cevap yok:
+
+- Bu fonksiyonlar hangi parametreleri alir?
+- Ne dondurur? (ALIS/SATIS/BEKLE string mi, return kodu mu, array mi?)
+- Strateji dosyasi nasil bir formatta yazilir? (source edilen .sh mi?)
+- Birden fazla sembol icin tek karar mi yoksa sembol basina karar mi?
+- Strateji kendi durumunu (state) nereye kaydeder?
+
+**Cozum:** Asama 8 kodlanirken strateji arayuz sozlesmesi detayli
+olarak tanimlanir. Asagidaki ornek sablon belirlenir:
+
+```bash
+# strateji/ornek.sh
+strateji_baslat() {
+    # Strateji baslangic ayarlari
+}
+strateji_degerlendir() {
+    local sembol="$1" fiyat="$2" hacim="$3"
+    # Karar mantigi
+    echo "BEKLE"   # veya "ALIS 100 312.50" veya "SATIS 50"
+}
+```
+
+**Hangi asamada cozulmeli:** Asama 8 (Strateji Katmani).
+
+### 14.3 Orta Sorunlar
+
+Sistemin isleyisini dogrudan etkilemez ama kod kalitesi ve
+surdurulebilirlik icin ele alinmasi gereken konular.
+
+#### 14.3.1 KURU_CALISTIR Modu Robot Icin Planlanmamis
+
+**Dosya:** adaptorler/ziraat.sh (mevcut: emir ve halka arz icin var)
+**Sorun:** Mevcut kodda `KURU_CALISTIR=1` ortam degiskeni ile emir
+gondermeden test modu var. Robot motorunun da bu modu desteklemesi
+gerekir — gercek parayla test etmeden strateji dogrulama icin kritik.
+
+**Cozum:** Robot baslatma fonksiyonuna `--kuru` parametresi eklenir:
+
+```bash
+robot_baslat --kuru ziraat 111111 strateji_a.sh
+# Tum dongu calisir ama emirler KURU_CALISTIR=1 ile gonderilir
+# Log'a "KURU: THYAO ALIS 100 lot 312.50 TL" yazilir
+```
+
+**Hangi asamada cozulmeli:** Asama 7 (Robot Motoru).
+
+#### 14.3.2 Tab Tamamlama Guncelleme Plani Eksik
+
+**Dosya:** tamamlama.sh (91 satir)
+**Sorun:** Mevcut tamamlama sadece 9 komutu biliyor: giris, bakiye,
+portfoy, emir, emirler, iptal, hesap, hesaplar, arz. Yeni komutlar
+(fiyat, gecmis, mutabakat, robot_baslat vb.) eklendikce tamamlama
+da guncellenmeli. Yol haritasinda buna ozel bir adim yok.
+
+**Cozum:** Her asama icin tamamlama guncellemesi kontrol listesine eklenir.
+Yeni fonksiyonlar eklendikce `_borsa_tamamla()` fonksiyonu da guncellenir.
+
+**Hangi asamada cozulmeli:** Her asamanin sonunda.
+
+#### 14.3.3 Log Dosyasi Rotasyonu Planlanmamis
+
+**Dosya:** /tmp/borsa/ altindaki debug dosyalari
+**Sorun:** Robot uzun sure (gunler, haftalar) calistikca debug_portfolio.html,
+emir_yanit.html, curl.log gibi dosyalar birikir. Disk dolabilir.
+
+**Cozum:** Robot motoruna periyodik log temizligi eklenir:
+- 7 gunden eski debug dosyalari silinir.
+- Log boyutu belirli bir esigi asarsa rotasyon yapilir.
+- `find /tmp/borsa -name "*.html" -mtime +7 -delete` gibi basit temizlik.
+
+**Hangi asamada cozulmeli:** Asama 7 (Robot Motoru).
+
+#### 14.3.4 docker-compose.yml Icerigi Tanimlanmamis
+
+**Dosya:** Bolum 11.2.2, Bolum 12.3
+**Sorun:** Plan "Supabase resmi docker-compose.yml'den sadeletirilir" diyor
+ama hangi servislerin kalacagini, port eslemelerini, volume tanimlarini
+ve ortam degiskenlerini belirtmiyor.
+
+**Cozum:** Asama 3 kodlanirken docker-compose.yml icerigi su servisleri
+icerecek sekilde olusturulur:
+
+| Servis | Port | Zorunlu |
+|--------|------|---------|
+| PostgreSQL | 5433:5432 | Evet |
+| PostgREST | 3000 (dahili) | Evet |
+| Kong | 8001:8000 | Evet |
+| GoTrue | 9999 (dahili) | Evet (PostgREST bagimli) |
+| Realtime | 4000 (dahili) | Hayir (ileride) |
+| Studio | 3002:3000 | Opsiyonel |
+| Storage | kapal | Hayir |
+
+Volume: PostgreSQL verisi icin named volume (docker compose down -v
+yapilmadikca veri korunur).
+
+**Hangi asamada cozulmeli:** Asama 3 (Veritabani Altyapisi).
+
+#### 14.3.5 borsa() Her Cagrildiginda Adaptoru Tekrar Source Ediyor
+
+**Dosya:** cekirdek.sh satir 774
+**Sorun:** `source "$surucu_dosyasi"` — her `borsa ziraat xxx` cagrisinda
+ziraat.sh'in tamami (1999 satir) tekrar parse ediliyor. Bu:
+- Performans icin gereksiz (~2000 satirlik dosya her seferinde parse)
+- readonly carpismasi riskini artirir (14.1.1)
+
+Avantaj: Adaptor kodunda yapilan degisiklik hemen yururluge girer.
+
+**Cozum secenekleri:**
+1. `_CEKIRDEK_SON_YUKLENEN_ADAPTOR` degiskeni ile kontrol: ayni adaptor
+   tekrar source edilmez, farkli adaptorse once unset yapilir.
+2. Mevcut haliyle birakilir (basitlik), readonly sorunu ayrica cozulur.
+
+**Hangi asamada cozulmeli:** Asama 1 (Oturum Altyapisi) sirasinda
+readonly sorunu cozulurken birlikte ele alinabilir.
+
+### 14.4 Sorun Ozet Tablosu
+
+| No | Oncelik | Sorun | Asama |
+|----|---------|-------|-------|
+| 14.1.1 | Kritik | ADAPTOR_ADI readonly carpmasi | Asama 1 oncesi |
+| 14.1.2 | Kritik | JWT token uretimi | Asama 3 |
+| 14.1.3 | Kritik | SQL migration stratejisi yok | Asama 3 |
+| 14.1.4 | Kritik | borsa() yeni komut yonlendirmesi | Asama 9 |
+| 14.2.1 | Onemli | Dosya onbellek race condition | Asama 6 |
+| 14.2.2 | Onemli | bist_pazar_emir_kontrol cagrilmiyor | Asama 5 |
+| 14.2.3 | Onemli | Index tanimlari yok | Asama 3 |
+| 14.2.4 | Onemli | Robot sinyal mekanizmasi belirsiz | Asama 6-7 |
+| 14.2.5 | Onemli | supabase.ayarlar.sh uretimi | Asama 3 |
+| 14.2.6 | Onemli | Strateji arayuzu belirsiz | Asama 8 |
+| 14.3.1 | Orta | KURU_CALISTIR robot destegi | Asama 7 |
+| 14.3.2 | Orta | Tab tamamlama guncelleme plani | Her asama |
+| 14.3.3 | Orta | Log dosyasi rotasyonu | Asama 7 |
+| 14.3.4 | Orta | docker-compose.yml icerigi | Asama 3 |
+| 14.3.5 | Orta | Adaptor tekrar source edilmesi | Asama 1 |
