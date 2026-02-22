@@ -41,6 +41,32 @@ _CEKIRDEK_DOSYA_IPTAL_DEBUG="iptal_debug.json"
 # Aktif hesap bilgisi — associative array: [kurum]=hesap_no
 declare -gA _CEKIRDEK_AKTIF_HESAPLAR
 
+# Aktif hesap secimini diske kaydeden dosya adi
+_CEKIRDEK_DOSYA_AKTIF_HESAP=".aktif_hesap"
+
+# -------------------------------------------------------
+# _cekirdek_aktif_hesaplari_yukle
+# Disk uzerinde kayitli aktif hesap secimlerini yukler.
+# Her kurum icin /tmp/borsa/<kurum>/.aktif_hesap dosyasindan
+# hesap numarasini okuyup _CEKIRDEK_AKTIF_HESAPLAR dizisine atar.
+# Source sirasinda otomatik cagrilir.
+# -------------------------------------------------------
+_cekirdek_aktif_hesaplari_yukle() {
+    local kurum_dizini hesap_dosyasi kurum hesap
+    for kurum_dizini in "${_CEKIRDEK_OTURUM_KOK}"/*/; do
+        [[ ! -d "$kurum_dizini" ]] && continue
+        hesap_dosyasi="${kurum_dizini}${_CEKIRDEK_DOSYA_AKTIF_HESAP}"
+        [[ ! -f "$hesap_dosyasi" ]] && continue
+        hesap=$(cat "$hesap_dosyasi" 2>/dev/null)
+        [[ -z "$hesap" ]] && continue
+        kurum=$(basename "$kurum_dizini")
+        _CEKIRDEK_AKTIF_HESAPLAR["$kurum"]="$hesap"
+    done
+}
+
+# Source sirasinda kayitli aktif hesaplari yukle
+_cekirdek_aktif_hesaplari_yukle
+
 # -------------------------------------------------------
 # cekirdek_oturum_dizini <kurum> [hesap_no]
 # Oturum dizinini dondurur. Yoksa olusturur.
@@ -86,11 +112,19 @@ cekirdek_dosya_yolu() {
 # -------------------------------------------------------
 # cekirdek_aktif_hesap_ayarla <kurum> <hesap_no>
 # Kurumun aktif hesabini set eder.
+# Hem bellekte hem diskte saklar, boylece diger
+# terminaller ve MCP subprocess'leri de okuyabilir.
 # -------------------------------------------------------
 cekirdek_aktif_hesap_ayarla() {
     local kurum="$1"
     local hesap="$2"
     _CEKIRDEK_AKTIF_HESAPLAR["$kurum"]="$hesap"
+
+    # Diske de kaydet
+    local kurum_dizini="${_CEKIRDEK_OTURUM_KOK}/${kurum}"
+    mkdir -p "$kurum_dizini" 2>/dev/null
+    echo "$hesap" > "${kurum_dizini}/${_CEKIRDEK_DOSYA_AKTIF_HESAP}"
+    chmod 600 "${kurum_dizini}/${_CEKIRDEK_DOSYA_AKTIF_HESAP}" 2>/dev/null
 }
 
 # -------------------------------------------------------
