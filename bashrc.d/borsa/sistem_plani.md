@@ -331,6 +331,13 @@ Mevcut olanlara (M), yeni ekleneceklere (Y) isaret konmustur.
 | adaptor_emirleri_listele | M | Bekleyen emirleri listeler |
 | adaptor_emir_iptal | M | Emri iptal eder |
 | adaptor_oturum_gecerli_mi | M | Oturum acik mi kontrol eder |
+| adaptor_portfoy | M | Hisse bazli detay listesi |
+| adaptor_halka_arz_liste | M | Halka arz listesini getirir |
+| adaptor_halka_arz_talepler | M | Mevcut talepleri listeler |
+| adaptor_halka_arz_talep | M | Yeni talep gonderir |
+| adaptor_halka_arz_iptal | M | Talebi iptal eder |
+| adaptor_halka_arz_guncelle | M | Talebi gunceller |
+| adaptor_cikis | Y | Oturumu kapatir (LogOff) |
 | adaptor_oturum_suresi_parse | Y | Giris yanitindan timeout suresini (saniye) parse eder |
 | adaptor_oturum_uzat | Y | Sessiz GET atarak oturumu uzatir, basarili=0, basarisiz=1 |
 | adaptor_hisse_bilgi_al | Y | Sembol icin son fiyat, tavan, taban, seans durumu dondurur |
@@ -348,6 +355,7 @@ Mevcut olanlara (M), yeni ekleneceklere (Y) isaret konmustur.
 
 | Fonksiyon | Aciklama |
 |-----------|----------|
+| robot_listele | Calisan tum robotlari PID, kurum, hesap, strateji ile listeler |
 | robot_baslat | Kurumu kilitler, oturum kontrol eder, koruma baslatir, donguyu calistirir |
 | robot_durdur | Donguyu durdurur, koruma dongusunu oldurur, ozet gosterir |
 | robot_oturum_koruma_baslat | Arka plan dongusunu baslatir (adaptor_oturum_uzat cagiran) |
@@ -685,15 +693,62 @@ AKBNK    42.80    47.08    38.52   0.82   Surekli Islem
 
 ### 10.2 Strateji Katmani
 
-Strateji bir Bash dosyasidir. Iki zorunlu fonksiyon tanimlar:
+Strateji bir Bash dosyasidir (`strateji/*.sh`). Robot motoru tarafindan `source` edilir.
+Her strateji dosyasi asagidaki arayuz sozlesmesine uymak zorundadir.
+
+#### 10.2.1 Strateji Arayuz Sozlesmesi
 
 ```bash
-strateji_baslat()      # Baslangic ayarlari (opsiyonel)
-strateji_degerlendir() # Her turda cagrilir, sinyal dondurur
-                       # stdout'a: ALIS|SATIS|BEKLE SEMBOL LOT FIYAT
+# strateji/ornek.sh — Her strateji dosyasi bu formata uyar
+
+# Zorunlu degisken: Stratejinin izleyecegi sembol listesi
+STRATEJI_SEMBOLLER=("THYAO" "AKBNK" "GARAN")
+
+# Opsiyonel fonksiyon: Strateji basladiginda bir kez cagrilir
+strateji_baslat() {
+    # Baslangic ayarlari, degisken tanimlari, esik degerleri
+    # Ornek: _ESIK_YUZDE=2.5
+}
+
+# Zorunlu fonksiyon: Robot dongusunun her turunda, her sembol icin cagrilir
+# Parametreler:
+#   $1 = sembol (THYAO)
+#   $2 = son fiyat (312.50)
+#   $3 = tavan (343.75)
+#   $4 = taban (281.25)
+#   $5 = degisim yuzdesi (1.34)
+#   $6 = hacim (1250000)
+#   $7 = seans durumu (Surekli Islem)
+# Donus:
+#   stdout'a tek satir yazilir, 3 formatdan biri:
+#     "BEKLE"                          — islem yapma
+#     "ALIS <lot> <fiyat>"             — alis emri (ornek: "ALIS 100 312.50")
+#     "SATIS <lot> <fiyat>"            — satis emri (ornek: "SATIS 50 315.00")
+#   Bos cikti = BEKLE olarak yorumlanir.
+#   Return kodu: 0=basarili, 1=hata (robot loglar ama durdurmaz)
+strateji_degerlendir() {
+    local sembol="$1" fiyat="$2" tavan="$3" taban="$4"
+    local degisim="$5" hacim="$6" seans="$7"
+    # Karar mantigi
+    echo "BEKLE"
+}
+
+# Opsiyonel fonksiyon: Robot durdugundan cagrilir
+strateji_temizle() {
+    # Temizlik, ozet, dosya kapatma
+}
 ```
 
-Strateji dosyasi hicbir kurum, adaptor veya HTTP detayi bilmez. Sadece veri alir, karar verir.
+#### 10.2.2 Strateji Kurallari
+
+- Strateji hicbir kurum, adaptor veya HTTP detayi bilmez. Sadece veri alir, karar verir.
+- Strateji kendi durumunu (state) proses-lokal degiskenlerde tutar
+  (robot basina ayri proses, carpisma olmaz).
+- Birden fazla sembol icin sembol basina ayri karar verilir.
+  Robot dongusunde `for sembol in STRATEJI_SEMBOLLER` ile her sembol icin
+  `strateji_degerlendir` cagrilir.
+- Strateji dosya adi robot baslatilirken parametre olarak verilir:
+  `robot_baslat ziraat 111111 ornek.sh`
 
 ## 11. Veritabani Katmani (Supabase)
 
@@ -861,6 +916,11 @@ Guvenlik:
 - Tamamen yerel: disaridan erisim yok, veri bilgisayardan cikmaz.
 - Sadece `anon` anahtar kullanilir, `service_role` KULLANILMAZ.
 - RLS politikalari tum tablolarda aktiftir (tek kullanici olsak bile).
+  RLS politikasi basit tutulur: `anon` rolu icin tum satirlara okuma ve yazma
+  izni verilir. Amac disaridan erisimi engellemek degil (zaten yerel),
+  PostgREST'in calismasi icin RLS'nin acik olmasini saglamaktir.
+  Her tablo icin: `ALTER TABLE <tablo> ENABLE ROW LEVEL SECURITY;`
+  `CREATE POLICY "anon_tam_erisim" ON <tablo> FOR ALL TO anon USING (true);`
 - `.gitignore` dosyasinda `supabase.ayarlar.sh` satiri bulunur.
 - Dosya izinleri `chmod 600` ile korunur.
 - Docker agı sadece localhost'a baglidir, dis ag erisimi kapatilir.
@@ -890,7 +950,7 @@ Supabase kapaliysa islem engellenmez, sadece DB yazimi atlanir.
 Gonderilen her emrin kalici kaydi. Emir gonderildigi anda yazilir.
 
 ```
-emirleri tablosu:
+emirler tablosu:
   id              BIGINT       PRIMARY KEY (otomatik)
   kurum           TEXT         NOT NULL    (ziraat, garanti vb)
   hesap           TEXT         NOT NULL    (hesap numarasi)
@@ -1072,6 +1132,17 @@ Tum fonksiyonlar `veritabani/supabase.sh` icerisinde tanimlanir.
 | vt_kar_zarar_rapor | Belirli donem icin toplam K/Z hesaplar |
 | vt_fiyat_gecmisi | Belirli sembol ve donem icin fiyat gecmisini getirir |
 | vt_fiyat_istatistik | Belirli sembol icin ort/min/maks/hacim istatistikleri |
+| vt_halka_arz_gecmisi | Belirli kurum/hesap icin halka arz islem gecmisi |
+| vt_robot_log_gecmisi | Belirli robot PID veya donem icin robot olaylarini getirir |
+| vt_oturum_log_gecmisi | Belirli kurum/hesap icin oturum olaylarini getirir |
+
+#### 11.6.4 Yardimci Fonksiyonlar
+
+| Fonksiyon | Aciklama |
+|-----------|----------|
+| vt_mutabakat_kontrol | Canli bakiye ile DB bakiyesini karsilastirir, tutarsizlik varsa UYARI loglar |
+| vt_pozisyon_mutabakat | Emir gecmisi ile portfoy pozisyonlarini carpraz kontrol eder |
+| _vt_bekleyenleri_gonder | DB yazimi basarisiz olan kayitlari /tmp/borsa/_vt_yedek/ dosyasindan tekrar dener |
 
 ### 11.7 Tetik Noktalari: Ne Zaman Yazilir
 
@@ -1363,8 +1434,35 @@ Tab tamamlama guncellenir.
 ### 12.10 Asama 10 - Ust Seviye Komutlar
 
 Robottan bagimsiz, kurumsuz ust seviye fonksiyonlar eklenir.
-emir_gonder, bakiye_sorgula gibi fonksiyonlar robot_baslat ile kilitli kurumu kullanir.
-Bu fonksiyonlar strateji katmanindan cagrilir.
+Bu fonksiyonlar strateji katmanindan veya terminalden dogrudan cagrilir.
+
+Eklenen fonksiyonlar:
+
+| Fonksiyon | Aciklama |
+|-----------|----------|
+| tum_bakiyeler | Tum acik hesaplarin bakiyelerini tek tabloda gosterir |
+| tum_portfoyler | Tum acik hesaplarin portfoylerini birlestirerek gosterir |
+| tum_emirler | Tum acik hesaplardaki bekleyen emirleri listeler |
+| tum_oturumlar | Acik oturumlari, kalan surelerini ve robot durumlarini gosterir |
+| gunluk_ozet | Bugunun tum islemlerini, K/Z'yi ve bakiye degisimini ozetler |
+
+Bu fonksiyonlar icsel olarak tum kurum/hesap dizinlerini tarar,
+her birinde adaptor fonksiyonlarini cagirir ve sonuclari tek tabloda birlestirir.
+Robot calismiyor olsa bile calisirir — robot_baslat ile kilit gerekmez.
+
+Tab tamamlama bu komutlar icin guncellenir.
+
+Ornek kullanim:
+
+```
+tum_bakiyeler
+  KURUM     HESAP    NAKIT        HISSE        TOPLAM
+  ziraat    111111   13,997.50    155,768.12   169,765.62
+  ziraat    222222    5,230.00     42,100.00    47,330.00
+  garanti   333333   25,000.00         0.00    25,000.00
+  ---
+  TOPLAM             44,227.50    197,868.12   242,095.62
+```
 
 ### 12.11 Asama 11 - Otomatik Kurulum Betigi
 
@@ -1404,7 +1502,7 @@ Gerekli komut satiri araclari kontrol edilir, eksik olanlar icin uyari verilir.
 |-----------------|------------|---------------------------------------|
 | git             | Zorunlu    | Repo yonetimi                         |
 | curl            | Zorunlu    | HTTP istekleri (borsa + supabase)      |
-| jq              | Zorunlu    | JSON parse (supabase + adaptor)        |
+| jq              | Kosullu    | Supabase aktifse zorunlu, yoksa opsiyonel (adaptor grep/sed fallback kullanir) |
 | docker          | Opsiyonel  | Supabase icin gerekli                  |
 | docker compose  | Opsiyonel  | Supabase icin gerekli                  |
 | python3 (3.10+) | Opsiyonel  | MCP sunucusu icin gerekli              |
@@ -1416,7 +1514,7 @@ Opsiyonel bagimliliklar eksikse uyari yazar ama devam eder.
 
 ```bash
 kontrol_et() {
-    local komut="$1"iz
+    local komut="$1"
     if ! command -v "$komut" &>/dev/null; then
         echo "HATA: '$komut' bulunamadi. Kurun: sudo apt install $komut"
         return 1
@@ -1485,22 +1583,55 @@ veritabani/ klasoru varsa Supabase yerel kurulumu yapilir.
 
 - Docker ve Docker Compose kontrolu yapilir. Yoksa uyari verilir ve bu adim atlanir.
 - `.env` dosyasi yoksa `.env.ornek` kopyalanarak olusturulur.
-- `.env` dosyasi olusturuldugunda rastgele JWT_SECRET uretilir (openssl rand).
+- `.env` dosyasi yoksa `.env.ornek` kopyalanir. JWT_SECRET, ANON_KEY ve
+  SERVICE_ROLE_KEY .env.ornek icinde **uyumlu varsayilan degerler** olarak
+  bulunur — yeniden uretim gerekmez. Yerel Supabase icin dis ag erisimi
+  olmadigindan varsayilan anahtarlar guvenlidir.
 - `docker compose up -d` calistirilarak konteynerler ayaga kaldirilir.
 - Konteynerlerin saglikli (healthy) olmasini bekler (maks 60 saniye).
 - PostgREST'e baglanti testi yapilir (curl localhost:8001).
+- `sema.sql` dosyasi calistirilarak tablolar olusturulur.
+- `supabase.ayarlar.sh` dosyasi `.env` dosyasindan otomatik uretilir.
 
 ```bash
 vt_dizin="$repo_dizin/bashrc.d/borsa/veritabani"
 if [ -f "$vt_dizin/docker-compose.yml" ]; then
     if command -v docker &>/dev/null && docker compose version &>/dev/null; then
+        # 1. .env dosyasi olustur (varsayilan anahtarlar uyumlu olarak gelir)
         if [ ! -f "$vt_dizin/.env" ]; then
             cp "$vt_dizin/.env.ornek" "$vt_dizin/.env"
-            # Rastgele JWT secret uret
-            jwt_secret="$(openssl rand -base64 32)"
-            sed -i "s|JWT_SECRET=.*|JWT_SECRET=$jwt_secret|" "$vt_dizin/.env"
         fi
+
+        # 2. Konteynerleri baslat
         cd "$vt_dizin" && docker compose up -d
+
+        # 3. PostgreSQL hazir olana kadar bekle (maks 60 sn)
+        echo "Supabase baslatiliyor..."
+        for i in $(seq 1 60); do
+            if docker compose exec -T db pg_isready -q 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+
+        # 4. Tablolari olustur (sema.sql)
+        if [ -f "$vt_dizin/sema.sql" ]; then
+            docker compose exec -T db psql -U postgres -d postgres \
+                -f /docker-entrypoint-initdb.d/sema.sql 2>/dev/null \
+                || psql -h localhost -p 5433 -U postgres -d postgres \
+                    -f "$vt_dizin/sema.sql" 2>/dev/null \
+                || echo "UYARI: Tablolar olusturulamadi. Studio'dan manuel olusturun."
+        fi
+
+        # 5. supabase.ayarlar.sh dosyasini olustur
+        if [ ! -f "$vt_dizin/supabase.ayarlar.sh" ]; then
+            anon_key=$(grep "^ANON_KEY=" "$vt_dizin/.env" | cut -d= -f2)
+            cat > "$vt_dizin/supabase.ayarlar.sh" << EOF
+# shellcheck shell=bash
+_SUPABASE_URL="http://localhost:8001"
+_SUPABASE_ANAHTAR="$anon_key"
+EOF
+        fi
     else
         echo "UYARI: Docker bulunamadi. Supabase kurulmadi."
         echo "Supabase icin: sudo apt install docker.io docker-compose-v2"
