@@ -41,6 +41,258 @@ _CEKIRDEK_DOSYA_IPTAL_DEBUG="iptal_debug.json"
 # Aktif hesap bilgisi — associative array: [kurum]=hesap_no
 declare -gA _CEKIRDEK_AKTIF_HESAPLAR
 
+# Veri katmani yukle (global veri yapilari + yardimci fonksiyonlar)
+# shellcheck source=/home/yasar/dotfiles/bashrc.d/borsa/veri_katmani.sh
+source "${BORSA_KLASORU}/veri_katmani.sh"
+
+# Veritabani katmanini yukle (Supabase erisim fonksiyonlari)
+if [[ -f "${BORSA_KLASORU}/veritabani/supabase.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${BORSA_KLASORU}/veritabani/supabase.sh"
+fi
+
+# Tarama katmanini yukle (veri kaynagi yonetimi)
+if [[ -f "${BORSA_KLASORU}/tarama/veri_kaynagi.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${BORSA_KLASORU}/tarama/veri_kaynagi.sh"
+fi
+
+# Robot motoru yukle
+if [[ -f "${BORSA_KLASORU}/robot/motor.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${BORSA_KLASORU}/robot/motor.sh"
+fi
+
+# =======================================================
+# OTURUM SURESI TAKIBI VE KORUMA DONGUSU
+# =======================================================
+# Adaptor giris sirasinda oturum suresini parse eder ve
+# cekirdek_oturum_suresi_kaydet ile kaydeder.
+# Robot motoru veya -o parametresi koruma dongusunu baslatir.
+# Dongu periyodik olarak sessiz istek atarak oturumu canli tutar.
+
+# Oturum zaman bilgileri — associative array: [kurum:hesap]=epoch
+declare -gA _CEKIRDEK_OTURUM_SURELERI       # timeout suresi (saniye)
+declare -gA _CEKIRDEK_OTURUM_SON_ISTEK       # son istek epoch zamani
+
+# -------------------------------------------------------
+# cekirdek_oturum_suresi_kaydet <kurum> <hesap> <sure_saniye>
+# Adaptor giris sirasinda parse edilen timeout degerini saklar.
+# Ayrica diske de yazar (robot prosesleri okuyabilsin).
+# -------------------------------------------------------
+cekirdek_oturum_suresi_kaydet() {
+    local kurum="$1"
+    local hesap="$2"
+    local sure="$3"
+
+    _CEKIRDEK_OTURUM_SURELERI["${kurum}:${hesap}"]="$sure"
+    local dizin
+    dizin=$(cekirdek_oturum_dizini "$kurum" "$hesap")
+    [[ -n "$dizin" ]] && echo "$sure" > "${dizin}/oturum_suresi"
+}
+
+# -------------------------------------------------------
+# cekirdek_son_istek_guncelle <kurum> <hesap>
+# Son basarili istek zamanini gunceller.
+# -------------------------------------------------------
+cekirdek_son_istek_guncelle() {
+    local kurum="$1"
+    local hesap="$2"
+    local simdi
+    simdi=$(date +%s)
+
+    _CEKIRDEK_OTURUM_SON_ISTEK["${kurum}:${hesap}"]="$simdi"
+    local dizin
+    dizin=$(cekirdek_oturum_dizini "$kurum" "$hesap")
+    [[ -n "$dizin" ]] && echo "$simdi" > "${dizin}/son_istek"
+}
+
+# -------------------------------------------------------
+# cekirdek_oturum_kalan <kurum> <hesap>
+# Kalan oturum suresini saniye olarak dondurur.
+# stdout: kalan saniye (negatifse oturum dusmus demek)
+# -------------------------------------------------------
+cekirdek_oturum_kalan() {
+    local kurum="$1"
+    local hesap="$2"
+    local anahtar="${kurum}:${hesap}"
+
+    local sure="${_CEKIRDEK_OTURUM_SURELERI[$anahtar]:-}"
+    local son_istek="${_CEKIRDEK_OTURUM_SON_ISTEK[$anahtar]:-}"
+
+    # Bellekte yoksa diskten oku
+    if [[ -z "$sure" ]] || [[ -z "$son_istek" ]]; then
+        local dizin
+        dizin=$(cekirdek_oturum_dizini "$kurum" "$hesap")
+        [[ -z "$dizin" ]] && echo "0" && return 1
+
+        [[ -z "$sure" ]] && [[ -f "${dizin}/oturum_suresi" ]] && \
+            sure=$(cat "${dizin}/oturum_suresi" 2>/dev/null)
+        [[ -z "$son_istek" ]] && [[ -f "${dizin}/son_istek" ]] && \
+            son_istek=$(cat "${dizin}/son_istek" 2>/dev/null)
+    fi
+
+    [[ -z "$sure" ]] && echo "0" && return 1
+    [[ -z "$son_istek" ]] && echo "$sure" && return 0
+
+    local simdi
+    simdi=$(date +%s)
+    local gecen=$(( simdi - son_istek ))
+    local kalan=$(( sure - gecen ))
+    echo "$kalan"
+}
+
+# -------------------------------------------------------
+# cekirdek_oturum_koruma_baslat <kurum> <hesap> <sahip>
+# Arka planda oturum koruma dongusunu baslatir.
+# sahip: "giris" veya "robot" — durdurma yetkisi icin.
+# -------------------------------------------------------
+cekirdek_oturum_koruma_baslat() {
+    local kurum="$1"
+    local hesap="$2"
+    local sahip="${3:-giris}"
+
+    local dizin
+    dizin=$(cekirdek_oturum_dizini "$kurum" "$hesap")
+    [[ -z "$dizin" ]] && return 1
+
+    # Zaten calisiyor mu?
+    if cekirdek_oturum_koruma_aktif_mi "$kurum" "$hesap"; then
+        _cekirdek_log "Oturum koruma zaten aktif ($kurum/$hesap)."
+        return 0
+    fi
+
+    local pid_dosyasi="${dizin}/oturum_koruma.pid"
+    local sahip_dosyasi="${dizin}/oturum_koruma.sahip"
+    local sure="${_CEKIRDEK_OTURUM_SURELERI[${kurum}:${hesap}]:-}"
+
+    # Diskten okumaya calis
+    if [[ -z "$sure" ]] && [[ -f "${dizin}/oturum_suresi" ]]; then
+        sure=$(cat "${dizin}/oturum_suresi" 2>/dev/null)
+    fi
+
+    # Varsayilan sure: 25 dakika (1500 saniye)
+    [[ -z "$sure" ]] && sure=1500
+
+    # Uzatma araligi: sure / 3
+    local aralik=$(( sure / 3 ))
+    [[ "$aralik" -lt 60 ]] && aralik=60
+
+    # Arka plan dongusu
+    (
+        trap 'exit 0' TERM INT
+        while true; do
+            sleep "$aralik"
+
+            # Oturum hala gecerli mi kontrol et
+            local kalan
+            kalan=$(cekirdek_oturum_kalan "$kurum" "$hesap")
+            if [[ "$kalan" -le 0 ]]; then
+                _cekirdek_log "Oturum koruma: oturum zaten dusmus ($kurum/$hesap)."
+                break
+            fi
+
+            # Adaptor uzatma fonksiyonu tanimli mi?
+            if declare -f adaptor_oturum_uzat > /dev/null 2>&1; then
+                if adaptor_oturum_uzat "$hesap" 2>/dev/null; then
+                    cekirdek_son_istek_guncelle "$kurum" "$hesap"
+                    _cekirdek_log "Oturum koruma: uzatildi ($kurum/$hesap)."
+                else
+                    _cekirdek_log "Oturum koruma: uzatma BASARISIZ ($kurum/$hesap)."
+                fi
+            else
+                # Adaptorde uzatma yoksa ana sayfaya sessiz GET at
+                local cookie_dosyasi
+                cookie_dosyasi=$(cekirdek_dosya_yolu "$kurum" "$_CEKIRDEK_DOSYA_COOKIE" "$hesap")
+                if [[ -f "$cookie_dosyasi" ]]; then
+                    cekirdek_istek_at \
+                        -c "$cookie_dosyasi" \
+                        -b "$cookie_dosyasi" \
+                        -o /dev/null \
+                        "https://esube1.ziraatyatirim.com.tr/sanalsube/tr/Home/Index" 2>/dev/null
+                    cekirdek_son_istek_guncelle "$kurum" "$hesap"
+                    _cekirdek_log "Oturum koruma: sessiz GET ile uzatildi ($kurum/$hesap)."
+                fi
+            fi
+        done
+    ) &
+
+    local arka_pid=$!
+    echo "$arka_pid" > "$pid_dosyasi"
+    echo "$sahip" > "$sahip_dosyasi"
+    disown "$arka_pid" 2>/dev/null
+
+    _cekirdek_log "Oturum koruma baslatildi: PID $arka_pid ($kurum/$hesap, sahip: $sahip)."
+}
+
+# -------------------------------------------------------
+# cekirdek_oturum_koruma_durdur <kurum> <hesap> [sahip_filtre]
+# Oturum koruma dongusunu durdurur.
+# sahip_filtre verilirse sadece o sahip durdurabilir.
+# -------------------------------------------------------
+cekirdek_oturum_koruma_durdur() {
+    local kurum="$1"
+    local hesap="$2"
+    local sahip_filtre="${3:-}"
+
+    local dizin
+    dizin=$(cekirdek_oturum_dizini "$kurum" "$hesap")
+    [[ -z "$dizin" ]] && return 1
+
+    local pid_dosyasi="${dizin}/oturum_koruma.pid"
+    local sahip_dosyasi="${dizin}/oturum_koruma.sahip"
+
+    [[ ! -f "$pid_dosyasi" ]] && return 0
+
+    # Sahip kontrolu
+    if [[ -n "$sahip_filtre" ]] && [[ -f "$sahip_dosyasi" ]]; then
+        local mevcut_sahip
+        mevcut_sahip=$(cat "$sahip_dosyasi" 2>/dev/null)
+        if [[ "$mevcut_sahip" != "$sahip_filtre" ]]; then
+            _cekirdek_log "Oturum koruma durdurma: sahip uyumsuz (mevcut: $mevcut_sahip, filtre: $sahip_filtre)."
+            return 0
+        fi
+    fi
+
+    local pid
+    pid=$(cat "$pid_dosyasi" 2>/dev/null)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        _cekirdek_log "Oturum koruma durduruldu: PID $pid ($kurum/$hesap)."
+    fi
+
+    rm -f "$pid_dosyasi" "$sahip_dosyasi" 2>/dev/null
+}
+
+# -------------------------------------------------------
+# cekirdek_oturum_koruma_aktif_mi <kurum> <hesap>
+# Oturum koruma dongusunun calisip calismadigini kontrol eder.
+# Donus: 0 = aktif, 1 = inaktif
+# -------------------------------------------------------
+cekirdek_oturum_koruma_aktif_mi() {
+    local kurum="$1"
+    local hesap="$2"
+
+    local dizin
+    dizin=$(cekirdek_oturum_dizini "$kurum" "$hesap")
+    [[ -z "$dizin" ]] && return 1
+
+    local pid_dosyasi="${dizin}/oturum_koruma.pid"
+    [[ ! -f "$pid_dosyasi" ]] && return 1
+
+    local pid
+    pid=$(cat "$pid_dosyasi" 2>/dev/null)
+    [[ -z "$pid" ]] && return 1
+
+    if kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+
+    # PID dosyasi var ama proses yok — temizle
+    rm -f "$pid_dosyasi" "${dizin}/oturum_koruma.sahip" 2>/dev/null
+    return 1
+}
+
 # Aktif hesap secimini diske kaydeden dosya adi
 _CEKIRDEK_DOSYA_AKTIF_HESAP=".aktif_hesap"
 
@@ -513,6 +765,294 @@ cekirdek_yazdir_halka_arz_talepler() {
 }
 
 # -------------------------------------------------------
+# ISLEM SONUC YAZDIRICILARI
+# Adaptorlerin tekrarlayan echo bloklarini merkezilestiren fonksiyonlar.
+# Her adaptor (ziraat, is_bankasi, ...) islem sonuclarini bu fonksiyonlar
+# ile yazdirir; boylece cikti formati tek noktada yonetilir.
+# -------------------------------------------------------
+
+# Genel bilgi kutusu yazici.
+# Baslik ve anahtar-deger ciftlerini cerceveli kutu icinde gosterir.
+# Kullanim: cekirdek_yazdir_bilgi_kutusu "BASLIK" "Anahtar1" "Deger1" "Anahtar2" "Deger2" ...
+# Not: Bos deger iceren alanlar otomatik olarak atlanir.
+cekirdek_yazdir_bilgi_kutusu() {
+    local baslik="$1"
+    shift
+
+    echo ""
+    echo "========================================="
+    echo " $baslik"
+    echo "========================================="
+
+    while [[ $# -ge 2 ]]; do
+        local anahtar="$1"
+        local deger="$2"
+        shift 2
+        [[ -z "$deger" ]] && continue
+        printf " %-10s : %s\n" "$anahtar" "$deger"
+    done
+
+    echo "========================================="
+    echo ""
+}
+
+# Emir sonucu yazici (gonder / kuru calistirma).
+# Kullanim: cekirdek_yazdir_emir_sonuc "BASLIK" <sembol> <islem> <lot> <fiyat> <tur> <durum> [referans]
+cekirdek_yazdir_emir_sonuc() {
+    local baslik="$1"
+    local sembol="$2"
+    local islem="$3"
+    local lot="$4"
+    local fiyat="$5"
+    local tur="$6"
+    local durum="$7"
+    local referans="${8:-}"
+
+    echo ""
+    echo "========================================="
+    echo " $baslik"
+    echo "========================================="
+    echo " Sembol    : $sembol"
+    echo " Islem     : $islem"
+    echo " Lot       : $lot"
+    echo " Fiyat     : $fiyat"
+    echo " Tur       : $tur"
+    if [[ -n "$referans" ]]; then
+        echo " Referans  : $referans"
+    fi
+    echo " Durum     : $durum"
+    echo "========================================="
+    echo ""
+}
+
+# Emir iptal sonucu yazici.
+# Kullanim: cekirdek_yazdir_emir_iptal <referans> <transaction_id> <durum> [mesaj]
+cekirdek_yazdir_emir_iptal() {
+    local referans="$1"
+    local transaction_id="$2"
+    local durum="$3"
+    local mesaj="${4:-}"
+
+    echo ""
+    echo "========================================="
+    echo " EMIR IPTAL EDILDI"
+    echo "========================================="
+    echo " Referans : $referans"
+    echo " Trans.ID : $transaction_id"
+    echo " Durum    : $durum"
+    if [[ -n "$mesaj" ]]; then
+        echo " Mesaj    : $mesaj"
+    fi
+    echo "========================================="
+    echo ""
+}
+
+# Halka arz talep sonucu yazici (talep / kuru calistirma).
+# Esnek alan destegi: anahtar-deger ciftleri parametre olarak gonderilir.
+# Kullanim: cekirdek_yazdir_arz_sonuc "BASLIK" "Alan1" "Deger1" "Alan2" "Deger2" ...
+cekirdek_yazdir_arz_sonuc() {
+    cekirdek_yazdir_bilgi_kutusu "$@"
+}
+
+# Portfoyde hisse bulunamadi bilgi kutusu.
+# Kullanim: cekirdek_yazdir_portfoy_bos <nakit>
+cekirdek_yazdir_portfoy_bos() {
+    local nakit="$1"
+    echo ""
+    echo "========================================="
+    echo " Portfoyde hisse senedi bulunamadi."
+    echo " Nakit Bakiye: ${nakit:-0.00} TL"
+    echo "========================================="
+    echo ""
+}
+
+# Oturum bilgi/uyari kutusu.
+# Kullanim: cekirdek_yazdir_oturum_bilgi "BASLIK" [anahtar1 deger1 ...]
+cekirdek_yazdir_oturum_bilgi() {
+    local baslik="$1"
+    shift
+
+    echo ""
+    echo "========================================="
+    echo " $baslik"
+    echo "========================================="
+    while [[ $# -ge 2 ]]; do
+        local anahtar="$1"
+        local deger="$2"
+        shift 2
+        [[ -z "$deger" ]] && continue
+        printf " %-10s : %s\n" "$anahtar" "$deger"
+    done
+    if [[ $# -eq 1 ]]; then
+        echo " $1"
+    fi
+    echo "========================================="
+    echo ""
+}
+
+# -------------------------------------------------------
+# ADAPTOR FABRIKASI
+# Yeni adaptor eklerken tekrarlanan ince sarmalayici (thin wrapper)
+# fonksiyonlari otomatik olusturur. Adaptor dosyasi source edildikten
+# sonra cagirilmali.
+#
+# Ornekler:
+#   cekirdek_adaptor_kaydet "ziraat"
+#   -> _ziraat_log, _ziraat_dosya_yolu, _ziraat_aktif_hesap_kontrol,
+#      _ziraat_oturum_dizini, _ziraat_cookie_guvence fonksiyonlari olusur.
+#
+#   cekirdek_adaptor_kaydet "isbankasi"
+#   -> _isbankasi_log, _isbankasi_dosya_yolu, ... fonksiyonlari olusur.
+# -------------------------------------------------------
+
+# Kullanim: cekirdek_adaptor_kaydet <kurum>
+# shellcheck disable=SC2086,SC2154
+cekirdek_adaptor_kaydet() {
+    local kurum="$1"
+    if [[ -z "$kurum" ]]; then
+        _cekirdek_log "HATA: cekirdek_adaptor_kaydet — kurum adi bos."
+        return 1
+    fi
+
+    eval "_${kurum}_oturum_dizini() { cekirdek_oturum_dizini '${kurum}' \"\$1\"; }"
+    eval "_${kurum}_dosya_yolu()    { cekirdek_dosya_yolu '${kurum}' \"\$1\" \"\$2\"; }"
+    eval "_${kurum}_aktif_hesap_kontrol() { cekirdek_aktif_hesap_kontrol '${kurum}'; }"
+    eval "_${kurum}_log()           { cekirdek_adaptor_log '${kurum}' \"\$1\"; }"
+    eval "_${kurum}_cookie_guvence() { cekirdek_cookie_guvence '${kurum}'; }"
+}
+
+# -------------------------------------------------------
+# ADAPTOR YARDIMCI FONKSIYONLARI
+# Adaptorlerde tekrarlanan kontrol ve parse desenlerini
+# merkezilestiren fonksiyonlar.
+# -------------------------------------------------------
+
+# Yanit boyutu kontrolu.
+# Yanit belirtilen esik degerinden kucukse hata mesaji yazdirir.
+# Kullanim: cekirdek_boyut_kontrol "$yanit" 500 "Halka arz sayfasi" "$ADAPTOR_ADI" || return 1
+cekirdek_boyut_kontrol() {
+    local yanit="$1"
+    local esik="$2"
+    local baglam="$3"
+    local kurum="$4"
+
+    if [[ "${#yanit}" -lt "$esik" ]]; then
+        cekirdek_adaptor_log "$kurum" "HATA: $baglam cok kucuk (${#yanit} bayt)."
+        echo "HATA: $baglam alinamadi. Oturum sonlanmis olabilir."
+        return 1
+    fi
+}
+
+# Login sayfasina yonlendirme kontrolu.
+# Sunucu oturumu sonlanmis kullanicilari login sayfasina yonlendirir.
+# Bu fonksiyon yanitda verilen kalibi arar.
+# Kullanim: cekirdek_oturum_yonlendirme_kontrol "$yanit" "Account/Login" "$ADAPTOR_ADI" || return 1
+cekirdek_oturum_yonlendirme_kontrol() {
+    local yanit="$1"
+    local kalip="$2"
+    local kurum="$3"
+
+    if echo "$yanit" | grep -q "$kalip"; then
+        cekirdek_adaptor_log "$kurum" "HATA: Oturum sonlanmis. Giris yapin."
+        echo "HATA: Oturum sonlanmis. Once giris yapin: borsa $kurum giris"
+        return 1
+    fi
+}
+
+# HTML/form iceriginden CSRF token cikarir.
+# Token bulunamazsa hata mesaji yazdirir ve return 1 yapar.
+# stdout: token degeri (basariliysa)
+# Kullanim: local csrf; csrf=$(cekirdek_csrf_cikar "$html" "$selektor" "emir formu" "$ADAPTOR_ADI") || return 1
+cekirdek_csrf_cikar() {
+    local html="$1"
+    local selektor="$2"
+    local baglam="$3"
+    local kurum="$4"
+
+    local token
+    token=$(echo "$html" | grep -oP "$selektor" | tail -n 1)
+
+    if [[ -z "$token" ]]; then
+        cekirdek_adaptor_log "$kurum" "HATA: CSRF token bulunamadi ($baglam)."
+        echo ""
+        return 1
+    fi
+    echo "$token"
+}
+
+# JSON API yaniti analiz eder (IsSuccess / IsError / Data / Message).
+# Adaptorler JSON endpoint'lerinden gelen yanitlari bu fonksiyonla parse eder.
+#
+# stdout: Message alani icerigi (bossa bos string)
+# Donus kodu:
+#   0 = Basari (IsSuccess=true veya Data==ek_basari_kalip)
+#   1 = Hata (IsError=true)
+#   2 = Bilinmeyen (ne basari ne hata tespit edilemedi)
+#
+# Kullanim:
+#   local mesaj
+#   mesaj=$(cekirdek_json_sonuc_isle "$yanit" "SILMEOK")
+#   case $? in
+#       0) echo "Basarili: $mesaj" ;;
+#       1) echo "Hata: $mesaj" ;;
+#       2) echo "Belirsiz: $mesaj" ;;
+#   esac
+cekirdek_json_sonuc_isle() {
+    local yanit="$1"
+    local ek_basari_kalip="${2:-}"
+
+    local mesaj
+    mesaj=$(echo "$yanit" | grep -oP '"[Mm]essage"\s*:\s*"\K[^"]+' | head -1)
+
+    # Basari: IsSuccess=true
+    if echo "$yanit" | grep -qiE '"[Ii]s[Ss]uccess"\s*:\s*true'; then
+        echo "${mesaj:-}"
+        return 0
+    fi
+
+    # Ek basari kalıbı (Data alaninda ozel deger, orn: "SILMEOK")
+    if [[ -n "$ek_basari_kalip" ]]; then
+        local veri_alani
+        veri_alani=$(echo "$yanit" | grep -oP '"Data"\s*:\s*"\K[^"]+' | head -1)
+        if [[ "$veri_alani" == "$ek_basari_kalip" ]]; then
+            echo "${mesaj:-}"
+            return 0
+        fi
+    fi
+
+    # Hata: IsError=true
+    if echo "$yanit" | grep -qiE '"[Ii]s[Ee]rror"\s*:\s*true'; then
+        echo "${mesaj:-Islem basarisiz}"
+        return 1
+    fi
+
+    # Bilinmeyen durum
+    echo "${mesaj:-Beklenmeyen yanit}"
+    return 2
+}
+
+# HTML hata mesaji cikarici ile hata gosterme deseni.
+# Adaptore ozel hata cikarma fonksiyonunu cagirip sonucu gosterir.
+# Kullanim: cekirdek_html_hata_goster "_ziraat_html_hata_cikar" "$yanit" "Emir reddedildi" "$debug_dosyasi"
+cekirdek_html_hata_goster() {
+    local hata_cikar_fonk="$1"
+    local yanit="$2"
+    local varsayilan_mesaj="$3"
+    local debug_dosyasi="${4:-}"
+
+    local hata_metni
+    hata_metni=$("$hata_cikar_fonk" "$yanit")
+
+    if [[ -n "$hata_metni" ]]; then
+        echo "HATA: $hata_metni"
+    elif [[ -n "$debug_dosyasi" ]]; then
+        echo "HATA: $varsayilan_mesaj. Debug: $debug_dosyasi"
+    else
+        echo "HATA: $varsayilan_mesaj"
+    fi
+}
+
+# -------------------------------------------------------
 # SAGLIK KONTROL SISTEMI
 # -------------------------------------------------------
 
@@ -632,6 +1172,243 @@ cekirdek_saglik_kontrol() {
     return 0
 }
 
+# =============================================================================
+# BOLUM 11 - UST SEVIYE FONKSIYONLAR
+# Tum acik oturumlari tarayarak birlesik bilgi sunar.
+# =============================================================================
+
+# Tum acik hesaplarin bakiyelerini tek tabloda gosterir.
+tum_bakiyeler() {
+    local toplam_nakit=0
+    local toplam_hisse=0
+    local toplam_genel=0
+    local satir_var=0
+
+    printf "%-12s %-10s %15s %15s %15s\n" \
+        "KURUM" "HESAP" "NAKIT" "HISSE" "TOPLAM"
+    printf "%s\n" "-------------------------------------------------------------------"
+
+    local kurum_klasoru
+    for kurum_klasoru in /tmp/borsa/*/; do
+        [[ -d "$kurum_klasoru" ]] || continue
+        local kurum_adi
+        kurum_adi=$(basename "$kurum_klasoru")
+        [[ "$kurum_adi" == "_vt_yedek" ]] && continue
+        [[ "$kurum_adi" == "_veri_durum" ]] && continue
+
+        local hesap_klasoru
+        for hesap_klasoru in "${kurum_klasoru}"*/; do
+            [[ -d "$hesap_klasoru" ]] || continue
+            local hesap_no
+            hesap_no=$(basename "$hesap_klasoru")
+
+            # Oturum acik mi kontrol et
+            [[ -f "${hesap_klasoru}oturum.cookie" ]] || continue
+
+            # Adaptor yukle ve bakiye al
+            local surucu="${BORSA_KLASORU}/adaptorler/${kurum_adi}.sh"
+            [[ -f "$surucu" ]] || continue
+
+            # shellcheck source=/dev/null
+            source "$surucu"
+
+            local bakiye_ciktisi
+            bakiye_ciktisi=$(adaptor_bakiye "$hesap_no" 2>/dev/null) || continue
+
+            # Basit ayristirma: nakit ve toplam satirlari ara
+            local nakit hisse toplam
+            nakit=$(echo "$bakiye_ciktisi" | grep -i "nakit\|TL" | head -1 | grep -oP '[\d,.]+' | tail -1 | tr -d '.' | tr ',' '.' || echo "0")
+            toplam=$(echo "$bakiye_ciktisi" | grep -i "toplam\|Genel" | head -1 | grep -oP '[\d,.]+' | tail -1 | tr -d '.' | tr ',' '.' || echo "0")
+            hisse=$(echo "$toplam - $nakit" | bc 2>/dev/null || echo "0")
+
+            printf "%-12s %-10s %15s %15s %15s\n" \
+                "$kurum_adi" "$hesap_no" "$nakit" "$hisse" "$toplam"
+
+            toplam_nakit=$(echo "$toplam_nakit + $nakit" | bc 2>/dev/null || echo "$toplam_nakit")
+            toplam_hisse=$(echo "$toplam_hisse + $hisse" | bc 2>/dev/null || echo "$toplam_hisse")
+            toplam_genel=$(echo "$toplam_genel + $toplam" | bc 2>/dev/null || echo "$toplam_genel")
+            satir_var=1
+        done
+    done
+
+    if [[ $satir_var -eq 0 ]]; then
+        echo "(Acik oturum bulunamadi)"
+        return 0
+    fi
+
+    printf "%s\n" "-------------------------------------------------------------------"
+    printf "%-12s %-10s %15s %15s %15s\n" \
+        "TOPLAM" "" "$toplam_nakit" "$toplam_hisse" "$toplam_genel"
+}
+
+# Tum acik hesaplarin portfoylerini birlesik gosterir.
+tum_portfoyler() {
+    local satir_var=0
+    local kurum_klasoru
+
+    for kurum_klasoru in /tmp/borsa/*/; do
+        [[ -d "$kurum_klasoru" ]] || continue
+        local kurum_adi
+        kurum_adi=$(basename "$kurum_klasoru")
+        [[ "$kurum_adi" == "_vt_yedek" ]] && continue
+
+        local hesap_klasoru
+        for hesap_klasoru in "${kurum_klasoru}"*/; do
+            [[ -d "$hesap_klasoru" ]] || continue
+            local hesap_no
+            hesap_no=$(basename "$hesap_klasoru")
+            [[ -f "${hesap_klasoru}oturum.cookie" ]] || continue
+
+            local surucu="${BORSA_KLASORU}/adaptorler/${kurum_adi}.sh"
+            [[ -f "$surucu" ]] || continue
+
+            # shellcheck source=/dev/null
+            source "$surucu"
+
+            if declare -f adaptor_portfoy > /dev/null; then
+                echo "=== $kurum_adi / $hesap_no ==="
+                adaptor_portfoy "$hesap_no" 2>/dev/null || echo "(Portfoy alinamadi)"
+                echo ""
+                satir_var=1
+            fi
+        done
+    done
+
+    if [[ $satir_var -eq 0 ]]; then
+        echo "(Acik oturum bulunamadi)"
+    fi
+}
+
+# Tum acik hesaplardaki bekleyen emirleri listeler.
+tum_emirler() {
+    local satir_var=0
+    local kurum_klasoru
+
+    for kurum_klasoru in /tmp/borsa/*/; do
+        [[ -d "$kurum_klasoru" ]] || continue
+        local kurum_adi
+        kurum_adi=$(basename "$kurum_klasoru")
+        [[ "$kurum_adi" == "_vt_yedek" ]] && continue
+
+        local hesap_klasoru
+        for hesap_klasoru in "${kurum_klasoru}"*/; do
+            [[ -d "$hesap_klasoru" ]] || continue
+            local hesap_no
+            hesap_no=$(basename "$hesap_klasoru")
+            [[ -f "${hesap_klasoru}oturum.cookie" ]] || continue
+
+            local surucu="${BORSA_KLASORU}/adaptorler/${kurum_adi}.sh"
+            [[ -f "$surucu" ]] || continue
+
+            # shellcheck source=/dev/null
+            source "$surucu"
+
+            echo "=== $kurum_adi / $hesap_no ==="
+            adaptor_emirleri_listele "$hesap_no" 2>/dev/null || echo "(Emir listesi alinamadi)"
+            echo ""
+            satir_var=1
+        done
+    done
+
+    if [[ $satir_var -eq 0 ]]; then
+        echo "(Acik oturum bulunamadi)"
+    fi
+}
+
+# Acik oturumlari, kalan surelerini ve robot durumlarini gosterir.
+tum_oturumlar() {
+    printf "%-12s %-10s %10s %8s %s\n" \
+        "KURUM" "HESAP" "KALAN" "KORUMA" "ROBOTLAR"
+    printf "%s\n" "-----------------------------------------------------------"
+
+    local satir_var=0
+    local kurum_klasoru
+    for kurum_klasoru in /tmp/borsa/*/; do
+        [[ -d "$kurum_klasoru" ]] || continue
+        local kurum_adi
+        kurum_adi=$(basename "$kurum_klasoru")
+        [[ "$kurum_adi" == "_vt_yedek" ]] && continue
+
+        local hesap_klasoru
+        for hesap_klasoru in "${kurum_klasoru}"*/; do
+            [[ -d "$hesap_klasoru" ]] || continue
+            local hesap_no
+            hesap_no=$(basename "$hesap_klasoru")
+            [[ -f "${hesap_klasoru}oturum.cookie" ]] || continue
+
+            # Kalan sure
+            local kalan="?"
+            if declare -f cekirdek_oturum_kalan > /dev/null; then
+                kalan=$(cekirdek_oturum_kalan "$kurum_adi" "$hesap_no" 2>/dev/null || echo "?")
+            fi
+
+            # Koruma durumu
+            local koruma="YOK"
+            if [[ -f "${hesap_klasoru}oturum_koruma.pid" ]]; then
+                local pid
+                pid=$(cat "${hesap_klasoru}oturum_koruma.pid" 2>/dev/null)
+                if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                    koruma="AKTIF"
+                fi
+            fi
+
+            # Robot sayisi
+            local robot_bilgi="YOK"
+            if [[ -d "${hesap_klasoru}robotlar" ]]; then
+                local robot_sayisi
+                robot_sayisi=$(find "${hesap_klasoru}robotlar" -name "*.pid" 2>/dev/null | wc -l)
+                if [[ "$robot_sayisi" -gt 0 ]]; then
+                    robot_bilgi="${robot_sayisi} adet"
+                fi
+            fi
+
+            printf "%-12s %-10s %10s %8s %s\n" \
+                "$kurum_adi" "$hesap_no" "$kalan" "$koruma" "$robot_bilgi"
+            satir_var=1
+        done
+    done
+
+    if [[ $satir_var -eq 0 ]]; then
+        echo "(Acik oturum bulunamadi)"
+    fi
+}
+
+# Bugunku tum islemleri, K/Z ve bakiye degisimini ozetler.
+gunluk_ozet() {
+    echo "=== Gunluk Ozet: $(date '+%Y-%m-%d') ==="
+    echo ""
+
+    # Acik oturumlar
+    echo "--- Oturumlar ---"
+    tum_oturumlar
+    echo ""
+
+    # Gun sonu raporu (DB'den)
+    if declare -f vt_gun_sonu_rapor > /dev/null; then
+        echo "--- Gun Sonu Rapor ---"
+        vt_gun_sonu_rapor
+        echo ""
+    fi
+
+    # Bakiyeler
+    echo "--- Bakiyeler ---"
+    tum_bakiyeler
+    echo ""
+
+    # Bekleyen DB yazmalari
+    local yedek_dosya="/tmp/borsa/_vt_yedek/bekleyen.jsonl"
+    if [[ -f "$yedek_dosya" ]]; then
+        local bekleyen_sayisi
+        bekleyen_sayisi=$(wc -l < "$yedek_dosya" 2>/dev/null || echo "0")
+        if [[ "$bekleyen_sayisi" -gt 0 ]]; then
+            echo "UYARI: $bekleyen_sayisi adet bekleyen DB yazisi var."
+            echo "       Gonderme icin: _vt_bekleyenleri_gonder"
+        fi
+    fi
+}
+
+export -f tum_bakiyeler tum_portfoyler tum_emirler tum_oturumlar gunluk_ozet
+
 borsa() {
     local kurum="$1"
     local komut="$2"
@@ -640,7 +1417,10 @@ borsa() {
     if [[ -z "$kurum" ]]; then
         echo "Kullanim: borsa <kurum> <komut> [argumanlar]"
         echo "         borsa kurallar [seans|fiyat|pazar|takas]"
-        echo "         borsa <kurum> hesap|hesaplar"
+        echo "         borsa gecmis [emirler|bakiye|sembol|kar|robot] [N|bugun|SEMBOL]"
+        echo "         borsa mutabakat <kurum> <hesap> [sembol]"
+        echo "         borsa robot [baslat|durdur|listele]"
+        echo "         borsa veri [baslat|durdur|goster|ayarla]"
         echo ""
         echo "Kurumlar:"
         local ad
@@ -648,8 +1428,9 @@ borsa() {
             echo "  - $ad"
         done < <(cekirdek_kurumlari_listele)
         echo ""
-        echo "Komutlar: giris, bakiye, portfoy, emir, emirler, iptal, arz, hesap, hesaplar"
-        echo "Kurallar: borsa kurallar [seans|fiyat|pazar [PAZAR_KODU]|takas|adim <FIYAT>|tavan <FIYAT>|taban <FIYAT>]"
+        echo "Kurum komutlari: giris [-o], bakiye, portfoy, emir, emirler, iptal,"
+        echo "                 arz, hesap, hesaplar, fiyat, cikis, oturum-durdur"
+        echo "Kurallar:        borsa kurallar [seans|fiyat|pazar|takas|adim|tavan|taban]"
         return 0
     fi
 
@@ -705,6 +1486,160 @@ borsa() {
         return 0
     fi
 
+    # Ozel komut: borsa gecmis — Veritabani gecmis sorgulari
+    if [[ "$kurum" == "gecmis" ]]; then
+        local alt_komut="$komut"
+        case "$alt_komut" in
+            emirler)
+                local limit="${1:-10}"
+                vt_emir_gecmisi "" "" "$limit"
+                ;;
+            bakiye)
+                local donem="${1:-bugun}"
+                vt_bakiye_gecmisi "" "" "$donem"
+                ;;
+            sembol)
+                local sembol="$1"
+                if [[ -z "$sembol" ]]; then
+                    echo "Kullanim: borsa gecmis sembol <SEMBOL>"
+                    return 1
+                fi
+                vt_pozisyon_gecmisi "" "" "$sembol"
+                ;;
+            kar)
+                local gun="${1:-30}"
+                vt_kar_zarar_rapor "" "" "$gun"
+                ;;
+            fiyat)
+                local sembol="$1"
+                local gun="${2:-30}"
+                if [[ -z "$sembol" ]]; then
+                    echo "Kullanim: borsa gecmis fiyat <SEMBOL> [GUN]"
+                    return 1
+                fi
+                vt_fiyat_gecmisi "$sembol" "$gun"
+                ;;
+            robot)
+                local pid_veya_gun="$1"
+                vt_robot_log_gecmisi "$pid_veya_gun"
+                ;;
+            oturum)
+                vt_oturum_log_gecmisi "$1" "$2"
+                ;;
+            rapor)
+                vt_gun_sonu_rapor
+                ;;
+            "")
+                echo "Kullanim: borsa gecmis <alt_komut>"
+                echo "Alt komutlar:"
+                echo "  emirler [N]         - Son N emri goster (varsayilan: 10)"
+                echo "  bakiye [bugun|N]    - Bakiye gecmisi"
+                echo "  sembol <SEMBOL>     - Sembol bazli pozisyon gecmisi"
+                echo "  kar [GUN]           - Son N gunun K/Z raporu (varsayilan: 30)"
+                echo "  fiyat <SEMBOL> [GUN]- Fiyat gecmisi"
+                echo "  robot [PID]         - Robot log gecmisi"
+                echo "  oturum [KURUM] [HESAP] - Oturum log gecmisi"
+                echo "  rapor               - Gun sonu raporu"
+                ;;
+            *)
+                echo "HATA: Bilinmeyen gecmis komutu: '$alt_komut'"
+                return 1
+                ;;
+        esac
+        return 0
+    fi
+
+    # Ozel komut: borsa mutabakat — Canli/DB karsilastirma
+    if [[ "$kurum" == "mutabakat" ]]; then
+        local mt_kurum="$komut"
+        local mt_hesap="$1"
+        local mt_sembol="${2:-}"
+
+        if [[ -z "$mt_kurum" ]] || [[ -z "$mt_hesap" ]]; then
+            echo "Kullanim: borsa mutabakat <kurum> <hesap> [sembol]"
+            return 1
+        fi
+
+        echo "--- Bakiye Mutabakat ---"
+        vt_mutabakat_kontrol "$mt_kurum" "$mt_hesap"
+
+        if [[ -n "$mt_sembol" ]]; then
+            echo ""
+            echo "--- Pozisyon Mutabakat: $mt_sembol ---"
+            vt_pozisyon_mutabakat "$mt_kurum" "$mt_hesap" "$mt_sembol"
+        fi
+        return 0
+    fi
+
+    # Ozel komut: borsa robot — Robot yonetimi
+    if [[ "$kurum" == "robot" ]]; then
+        local rb_komut="$komut"
+        case "$rb_komut" in
+            baslat)
+                robot_baslat "$@"
+                ;;
+            durdur)
+                robot_durdur "$@"
+                ;;
+            listele|liste)
+                robot_listele
+                ;;
+            "")
+                echo "Kullanim: borsa robot <komut>"
+                echo "Komutlar:"
+                echo "  baslat [--kuru] <kurum> <hesap> <strateji.sh>"
+                echo "  durdur <kurum> <hesap> [strateji_adi]"
+                echo "  listele"
+                ;;
+            *)
+                echo "HATA: Bilinmeyen robot komutu: '$rb_komut'"
+                return 1
+                ;;
+        esac
+        return 0
+    fi
+
+    # Ozel komut: borsa veri — Veri kaynagi yonetimi
+    if [[ "$kurum" == "veri" ]]; then
+        local vr_komut="$komut"
+        case "$vr_komut" in
+            baslat)
+                veri_kaynagi_baslat "$@"
+                ;;
+            durdur)
+                veri_kaynagi_durdur
+                ;;
+            goster|durum)
+                veri_kaynagi_goster
+                ;;
+            ayarla)
+                veri_kaynagi_ayarla "$@"
+                ;;
+            fiyat)
+                local sembol="$1"
+                if [[ -z "$sembol" ]]; then
+                    echo "Kullanim: borsa veri fiyat <SEMBOL>"
+                    return 1
+                fi
+                veri_kaynagi_fiyat_al "$sembol"
+                ;;
+            "")
+                echo "Kullanim: borsa veri <komut>"
+                echo "Komutlar:"
+                echo "  baslat               - Veri kaynagini otomatik sec ve baslat"
+                echo "  durdur               - Veri kaynagini durdur"
+                echo "  goster               - Aktif kaynagi ve yedekleri goster"
+                echo "  ayarla <kurum> <hesap>- Manuel kaynak sec"
+                echo "  fiyat <SEMBOL>       - Sembol fiyati sorgula"
+                ;;
+            *)
+                echo "HATA: Bilinmeyen veri komutu: '$vr_komut'"
+                return 1
+                ;;
+        esac
+        return 0
+    fi
+
     local surucu_dosyasi="${BORSA_KLASORU}/adaptorler/${kurum}.sh"
 
     if [[ ! -f "$surucu_dosyasi" ]]; then
@@ -717,12 +1652,35 @@ borsa() {
         return 1
     fi
 
+    # Onceki adaptorunkinden farkli ise degiskenleri temizle
+    if [[ "${_CEKIRDEK_SON_ADAPTOR:-}" != "$kurum" ]]; then
+        unset ADAPTOR_ADI ADAPTOR_SURUMU 2>/dev/null || true
+        _CEKIRDEK_SON_ADAPTOR="$kurum"
+    fi
+
     # shellcheck source=/dev/null
     source "$surucu_dosyasi"
 
     case "$komut" in
         giris)
-            adaptor_giris "$@"
+            local oturum_koru=0
+            local giris_args=()
+            local arg
+            for arg in "$@"; do
+                if [[ "$arg" == "-o" ]]; then
+                    oturum_koru=1
+                else
+                    giris_args+=("$arg")
+                fi
+            done
+
+            adaptor_giris "${giris_args[@]}"
+            local giris_sonuc=$?
+
+            if [[ $giris_sonuc -eq 0 ]] && [[ $oturum_koru -eq 1 ]]; then
+                local hesap="${giris_args[0]}"
+                cekirdek_oturum_koruma_baslat "$kurum" "$hesap" "giris"
+            fi
             ;;
         bakiye)
             adaptor_bakiye "$@"
@@ -813,14 +1771,62 @@ borsa() {
                 cekirdek_hesaplar "$kurum" "$@"
             fi
             ;;
+        cikis)
+            local hesap="$1"
+            if [[ -z "$hesap" ]]; then
+                echo "Kullanim: borsa $kurum cikis <hesap_no>"
+                return 1
+            fi
+
+            # Adaptor cikis fonksiyonu varsa cagir (LogOff)
+            if declare -f adaptor_cikis > /dev/null; then
+                adaptor_cikis "$hesap"
+            fi
+
+            # Oturum korumayi durdur
+            cekirdek_oturum_koruma_durdur "$kurum" "$hesap"
+
+            # Oturum log yaz
+            if declare -f vt_oturum_log_yaz > /dev/null; then
+                vt_oturum_log_yaz "$kurum" "$hesap" "CIKIS" "Manuel cikis" &
+            fi
+
+            echo "Oturum kapatildi: $kurum / $hesap"
+            ;;
+        oturum-durdur)
+            local hesap="$1"
+            if [[ -z "$hesap" ]]; then
+                echo "Kullanim: borsa $kurum oturum-durdur <hesap_no>"
+                return 1
+            fi
+            cekirdek_oturum_koruma_durdur "$kurum" "$hesap"
+            echo "Oturum koruma durduruldu (oturum acik kaldi): $kurum / $hesap"
+            ;;
+        fiyat)
+            local sembol="$1"
+            if [[ -z "$sembol" ]]; then
+                echo "Kullanim: borsa $kurum fiyat <SEMBOL>"
+                return 1
+            fi
+            # Adaptor varsa dogrudan adaptor ile sorgula
+            if declare -f adaptor_hisse_bilgi_al > /dev/null; then
+                adaptor_hisse_bilgi_al "$sembol"
+            elif declare -f veri_kaynagi_fiyat_al > /dev/null; then
+                veri_kaynagi_fiyat_al "$sembol"
+            else
+                echo "HATA: Fiyat sorgulama desteklenmiyor."
+                return 1
+            fi
+            ;;
         "")
             echo "Kullanim: borsa $kurum <komut>"
-            echo "Komutlar: giris, bakiye, portfoy, emir, emirler, iptal, arz, hesap, hesaplar"
-            echo "Ayrica:  borsa kurallar [seans|fiyat|pazar|takas|adim|tavan|taban]"
+            echo "Komutlar: giris [-o], bakiye, portfoy, emir, emirler, iptal,"
+            echo "          arz, hesap, hesaplar, fiyat, cikis, oturum-durdur"
             ;;
         *)
             echo "HATA: Bilinmeyen komut: '$komut'"
-            echo "Gecerli komutlar: giris, bakiye, portfoy, emir, emirler, iptal, arz, hesap, hesaplar"
+            echo "Gecerli komutlar: giris, bakiye, portfoy, emir, emirler,"
+            echo "  iptal, arz, hesap, hesaplar, fiyat, cikis, oturum-durdur"
             return 1
             ;;
     esac

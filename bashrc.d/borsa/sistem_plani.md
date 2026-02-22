@@ -153,20 +153,81 @@ Ana dongu ile paralel calisan ayri bir dongudur. Robot basladiginda aktif olur, 
 | Uzatma dongusunu baslat/durdur | Robot motoru | Uzun sureli calisan tek katman |
 | Emir oncesi oturum kontrol | Cekirdek | Her emir gonderiminde garantili kontrol |
 
-### 5.2 Neden Robot Motorunda?
+### 5.2 Oturum Koruma: Robot vs Manuel
 
-Manuel kullanim (borsa ziraat bakiye) icin oturum uzatma gerekmez cunku:
-- Her komut bir HTTP istegi yapar, bu istek oturumu zaten uzatir.
-- Kullanici dakikalarca komut girmezse oturum duser ama bu beklenen davranistir.
-- Kullanici tekrar giris yapar, sorun olmaz.
+Oturum koruma dongusunun iki tetikleme noktasi vardir:
 
-Robot icin oturum uzatma gerekir cunku:
-- Robot sinyal beklerken dakikalarca HTTP istegi yapmayabilir.
-- Bu bekleme surecinde oturum sessizce duser.
-- Robot istegi geldiginde emir gonderilemez, firsat kacirilir.
-- Otomatik uzatma olmadan robot guvenilir calismaz.
+**1. Robot motoru (otomatik):**
+Robot basladiginda oturum koruma dongusunu otomatik baslatir.
+Robot durdugundan dongu de kapanir. Kullanicinin bir sey yapmasina gerek yoktur.
 
-Bu yuzden oturum koruma dongusu robot motorunun sorumlulugudur. Manuel kullarimda calistirilmaz.
+**2. Manuel giris ile `-o` parametresi:**
+Kullanici `borsa ziraat giris -o 123456 parola` yazdiginda giris tamamlandiktan
+sonra oturum koruma dongusu arka planda baslatilir. Bu sayede kullanici
+terminal basinda olmasa bile oturum acik kalir.
+
+`-o` parametresi olmadan yapilan normal giris (`borsa ziraat giris 123456 parola`)
+eski davranisi korur — oturum koruma baslatilmaz, kullanici istek yapmadikca
+oturum suresi dolunca duser.
+
+#### 5.2.1 Neden `-o` Gerekli?
+
+- Ziraat gibi kurumlarda SMS dogrulamasi vardir. Oturum dustugunde tekrar
+  giris yapmak zahmetlidir (yeni SMS, yeni kod).
+- Kullanici giris yaptiktan sonra cay molasi verebilir, toplantiya girebilir.
+  25 dakika sonra dondugunde oturum dusmus olur.
+- Robot kullanmayan ama uzun sureli oturum isteyen kullanicilar icin
+  robot_baslat gereksiz agir bir cozumdur.
+- `-o` hafif bir cozumdur: sadece periyodik sessiz GET atar, baska hicbir sey yapmaz.
+
+#### 5.2.2 `-o` ile Robot Birlikte Kullanilirsa
+
+`-o` ile giris yapilmis bir hesapta `robot_baslat` cagrilirsa robot kendi
+oturum koruma dongusunu baslatmaz. Mevcut `oturum_koruma.pid` dosyasini
+tespit eder ve onu kullanir.
+
+```
+Senaryo: -o ile giris + sonra robot
+
+  borsa ziraat giris -o 111111 parola
+    -> giris basarili
+    -> oturum_koruma PID 9001 baslatildi
+    -> /tmp/borsa/ziraat/111111/oturum_koruma.pid = 9001
+
+  robot_baslat ziraat 111111 strateji_a.sh
+    -> oturum_koruma.pid mevcut, PID 9001 calisiyor
+    -> robot kendi koruma dongusunu BASLATMAZ
+    -> robot PID 4501 baslatildi
+    -> /tmp/borsa/ziraat/111111/robot.pid = 4501
+
+  robot_durdur ziraat 111111
+    -> robot PID 4501 durduruldu
+    -> oturum_koruma PID 9001 DURDURULMAZ (robot baslatmadigi icin)
+    -> oturum hala korunuyor
+```
+
+Ters senaryo: Robot baslatilip daha sonra robot durdurulursa, robot kendi
+baslattigi oturum koruma dongusunu de durdurur.
+
+```
+Senaryo: Robot baslatir + robot durdurur
+
+  robot_baslat ziraat 111111 strateji_a.sh
+    -> oturum_koruma.pid YOK, robot kendi dongusunu baslatir
+    -> oturum_koruma PID 9002 baslatildi (robot tarafindan)
+    -> /tmp/borsa/ziraat/111111/oturum_koruma.pid = 9002
+    -> /tmp/borsa/ziraat/111111/oturum_koruma.sahip = robot
+    -> robot PID 4501 baslatildi
+
+  robot_durdur ziraat 111111
+    -> robot PID 4501 durduruldu
+    -> oturum_koruma.sahip = robot -> koruma da durdurulur
+    -> oturum_koruma PID 9002 durduruldu
+```
+
+Sahiplik mekanizmasi: `oturum_koruma.sahip` dosyasi koruma dongusunu kimin
+baslattigi bilgisini tutar (`giris` veya `robot`). Robot sadece kendisinin
+baslattigi koruma dongusunu durdurur.
 
 ### 5.3 Coklu Kurum ve Coklu Hesap Senaryosu
 
@@ -215,29 +276,34 @@ Robotlar arka plan prosesi olarak calisir. Hangi terminalden baslatilirsa baslat
 terminalden bagimsizdirlar. Terminal kapatilsa bile robot calismaya devam eder.
 Herhangi bir terminalden durdurulabilir.
 
-Her robot tam olarak bir kurum+hesap ikilisine kilitlenir:
+Her robot bir kurum+hesap+strateji uclusune kilitlenir.
+Ayni hesapta birden fazla strateji calistirmak mumkundur:
 
 ```
 Terminal 1:
   robot_baslat ziraat 111111 strateji_a.sh   -> PID 4501, arka planda
-  robot_baslat ziraat 222222 strateji_b.sh   -> PID 4502, arka planda
+  robot_baslat ziraat 111111 strateji_b.sh   -> PID 4502, arka planda (ayni hesap, farkli strateji)
+  robot_baslat ziraat 222222 strateji_c.sh   -> PID 4503, arka planda
 
 Terminal 2:
-  robot_baslat garanti 333333 strateji_c.sh  -> PID 4503, arka planda
-  robot_baslat garanti 444444 strateji_d.sh  -> PID 4504, arka planda
-  robot_baslat garanti 555555 strateji_e.sh  -> PID 4505, arka planda
+  robot_baslat garanti 333333 strateji_d.sh  -> PID 4504, arka planda
+  robot_baslat garanti 333333 strateji_e.sh  -> PID 4505, arka planda (ayni hesap, farkli strateji)
+  robot_baslat garanti 444444 strateji_f.sh  -> PID 4506, arka planda
 
 # Terminal 1 ve 2 kapatilsa bile 5 robot calismaya devam eder
 ```
 
-Her robot basladiginda PID'si oturum dizinine kaydedilir:
+Her robot basladiginda PID'si strateji adina gore kaydedilir.
+Ayni hesapta birden fazla robot olabilecegindan `robot.pid` yerine
+`robotlar/` klasoru altinda strateji basina ayri PID dosyasi tutulur:
 
 ```
-/tmp/borsa/ziraat/111111/robot.pid      # icerik: 4501
-/tmp/borsa/ziraat/222222/robot.pid      # icerik: 4502
-/tmp/borsa/garanti/333333/robot.pid     # icerik: 4503
-/tmp/borsa/garanti/444444/robot.pid     # icerik: 4504
-/tmp/borsa/garanti/555555/robot.pid     # icerik: 4505
+/tmp/borsa/ziraat/111111/robotlar/strateji_a.pid   # icerik: 4501
+/tmp/borsa/ziraat/111111/robotlar/strateji_b.pid   # icerik: 4502
+/tmp/borsa/ziraat/222222/robotlar/strateji_c.pid   # icerik: 4503
+/tmp/borsa/garanti/333333/robotlar/strateji_d.pid  # icerik: 4504
+/tmp/borsa/garanti/333333/robotlar/strateji_e.pid  # icerik: 4505
+/tmp/borsa/garanti/444444/robotlar/strateji_f.pid  # icerik: 4506
 ```
 
 #### 5.3.3 Robot Yonetimi (Herhangi Bir Terminalden)
@@ -274,7 +340,7 @@ Bu calisiyor cunku:
 - robot_listele tum kurum/hesap dizinlerini tarar, robot.pid dosyasi olan yerleri listeler.
 - robot_durdur PID dosyasini okuyup kill ile prosesi sonlandirir.
 
-#### 5.3.4 Carpisma Olmaz
+#### 5.3.4 Carpisma Yonetimi
 
 Her robot kendi proses-lokal degiskenlerini tasir:
 
@@ -282,17 +348,187 @@ Her robot kendi proses-lokal degiskenlerini tasir:
 PID 4501 icinde:
   _ROBOT_KURUM="ziraat"
   _ROBOT_HESAP="111111"
+  _ROBOT_STRATEJI="strateji_a.sh"
 
 PID 4502 icinde:
   _ROBOT_KURUM="ziraat"
-  _ROBOT_HESAP="222222"
+  _ROBOT_HESAP="111111"
+  _ROBOT_STRATEJI="strateji_b.sh"
 ```
 
-Ayni kurumdaki iki farkli hesap bile birbirini etkilemez cunku:
+Farkli hesaplardaki robotlar birbirini etkilemez cunku:
 - Cookie dosyalari farkli dizinlerdedir.
 - Oturum koruma donguleri farkli PID'lerle calisir.
 - Degiskenler farkli Bash proseslerinde yasarlar.
 - Her proses kendi log dosyasina yazar.
+
+##### 5.3.4.1 Ayni Hesapta Coklu Strateji Riskleri
+
+Ayni hesapta birden fazla strateji calistirildiginda uc risk ortaya cikar:
+
+| Risk | Ornek | Sonuc |
+|------|-------|-------|
+| Emir catismasi | Strateji A "THYAO al" der, strateji B ayni anda "THYAO sat" der | Anlamsiz islem, komisyon kaybi |
+| Bakiye yarisi | Strateji A 10.000 TL'lik emir gonderir, strateji B de 10.000 TL'lik emir gonderir — ama bakiye 12.000 TL | Yetersiz bakiye hatasi |
+| Lot catismasi | Strateji A portfoydeki 100 THYAO'yu satar, strateji B de ayni 100 lotu satmaya calisir | Yetersiz lot hatasi |
+
+##### 5.3.4.2 Koordinasyon Katmani: Emir Kuyrugu
+
+Bu riskleri cozen mekanizma **emir kuyrugu**dur. Ayni hesaptaki tum robotlar
+emirlerini dogrudan adaptor_emir_gonder'e gondermez — once kuyruga yazar.
+Kuyruk isleyici (tek proses) emirleri sirayla isler.
+
+```
+[EMIR KUYRUGU AKISI]
+
+  Strateji A (PID 4501):  "ALIS THYAO 50 312.50"  --+
+                                                     |     KUYRUK
+  Strateji B (PID 4502):  "SATIS AKBNK 100 42.80" --+-->  DOSYASI
+                                                     |   (siralama)
+  Strateji C (PID 4503):  "ALIS GARAN 200 23.50"  --+
+                                                            |
+                                                            v
+                                                    [KUYRUK ISLEYICI]
+                                                    (tek proses)
+                                                            |
+                                     +---------------------+---------------------+
+                                     |                     |                     |
+                              Bakiye yeterli mi?     Lot yeterli mi?      Celiski var mi?
+                              12.000 >= 15.625?      100 >= 100?          THYAO AL + SAT?
+                                     |                     |                     |
+                                  EVET/HAYIR            EVET/HAYIR           EVET/HAYIR
+                                     |                     |                     |
+                                     v                     v                     v
+                              Yeterliyse gonder      Yeterliyse gonder    Celiskiyi logla
+                              Yetersizse reddet      Yetersizse reddet    Ikisini de reddet
+```
+
+##### 5.3.4.3 Kuyruk Dosya Yapisi
+
+Her hesabin kendi emir kuyrugu vardir:
+
+```
+/tmp/borsa/ziraat/111111/
+    emir_kuyrugu/
+        kuyruk.fifo              # Named pipe (FIFO), robotlar buraya yazar
+        isleyici.pid             # Kuyruk isleyici prosesinin PID'si
+        bakiye_kilidi.lock       # flock ile bakiye guncelleme kilidi
+    robotlar/
+        strateji_a.pid           # Robot A PID
+        strateji_b.pid           # Robot B PID
+    oturum_koruma.pid
+    oturum_koruma.sahip
+    cookies.txt
+```
+
+##### 5.3.4.4 Nasil Calisiyor
+
+**1. Robot basladiginda:**
+
+```bash
+robot_baslat ziraat 111111 strateji_a.sh
+  -> robotlar/ klasorunde baska .pid var mi? (coklu strateji durumu)
+  -> EVET ise: emir_kuyrugu zaten calisiyor, dokunma
+  -> HAYIR ise (ilk robot): emir_kuyrugu_baslat olustur
+```
+
+**2. Strateji emir vermek istediginde:**
+
+Strateji ciktisi `ALIS THYAO 50 312.50` seklindedir.
+Robot motoru bu emri dogrudan adaptor_emir_gonder'e iletmez.
+Once hesapta baska robot var mi kontrol eder:
+
+```bash
+# Robot motorundaki emir gonderme mantigi:
+if hesapta_tek_robot_mu; then
+    # Tek robot, kuyruk gereksiz -> dogrudan gonder
+    adaptor_emir_gonder "$sembol" "$yon" "$lot" "$fiyat"
+else
+    # Coklu robot, kuyruga yaz
+    echo "$strateji|$sembol|$yon|$lot|$fiyat|$(date +%s)" > kuyruk.fifo
+    # Kuyruk isleyici alip isleyecek
+fi
+```
+
+**3. Kuyruk isleyici emirleri islerken:**
+
+```bash
+# emir_kuyrugu_isle (ayri proses, surekli dinler)
+while IFS='|' read -r strateji sembol yon lot fiyat zaman < kuyruk.fifo; do
+
+    # 1. Celiski kontrolu: Son 30 sn icinde ayni sembol icin ters emir var mi?
+    if celiski_var_mi "$sembol" "$yon"; then
+        log "REDDEDILDI: $strateji $yon $sembol — ters emir mevcut"
+        continue
+    fi
+
+    # 2. Bakiye kontrolu (flock ile kilitli):
+    flock 200
+    mevcut_bakiye=$(adaptor_bakiye | grep nakit | awk '{print $2}')
+    gereken = lot * fiyat
+    if (( gereken > mevcut_bakiye )); then
+        log "REDDEDILDI: $strateji $yon $lot $sembol — bakiye yetersiz"
+        flock -u 200
+        continue
+    fi
+
+    # 3. Lot kontrolu (satis icin):
+    if [[ "$yon" == "satis" ]]; then
+        mevcut_lot=$(adaptor_portfoy | grep "$sembol" | awk '{print $2}')
+        if (( lot > mevcut_lot )); then
+            log "REDDEDILDI: $strateji SATIS $lot $sembol — lot yetersiz ($mevcut_lot)"
+            flock -u 200
+            continue
+        fi
+    fi
+
+    # 4. Emir gonder
+    adaptor_emir_gonder "$sembol" "$yon" "$lot" "$fiyat"
+    log "GONDERILDI: $strateji $yon $lot $sembol @ $fiyat"
+    flock -u 200
+
+done 200>bakiye_kilidi.lock
+```
+
+##### 5.3.4.5 Tek Robot Optimizasyonu
+
+Eger hesapta tek strateji calisiyorsa kuyruk mekanizmasi devreye girmez.
+Emirler eski davranistaki gibi dogrudan adaptor_emir_gonder'e gider.
+Bu sayede tek strateji senaryosunda hicbir performans kaybi olmaz.
+
+Kontrol mekanizmasi:
+
+```
+robot emir gondermek istediginde:
+  robotlar/ klasorundeki .pid dosyalarini say
+  sayi == 1 -> dogrudan gonder (kuyruk yok)
+  sayi > 1  -> kuyruga yaz
+```
+
+##### 5.3.4.6 Robot Durdurma ve Kuyruk Temizligi
+
+```
+robot_durdur ziraat 111111 strateji_a
+  -> strateji_a.pid okunur, kill ile durdurulur
+  -> strateji_a.pid silinir
+  -> robotlar/ klasorunde baska .pid kaldi mi?
+     EVET -> kuyruk isleyici calismaya devam eder
+     HAYIR -> son robot da durdu, kuyruk isleyici de durdurulur
+             isleyici.pid okunur, kill ile durdurulur
+             emir_kuyrugu/ klasoru temizlenir
+```
+
+##### 5.3.4.7 Coklu Strateji Ozet Tablosu
+
+| Hesap | Robotlar | Kuyruk | Oturum Koruma |
+|-------|----------|--------|---------------|
+| ziraat/111111 | strateji_a (4501), strateji_b (4502) | Aktif (isleyici PID 5001) | PID 9001 (tek, paylasilir) |
+| ziraat/222222 | strateji_c (4503) | Yok (tek robot) | PID 9002 |
+| garanti/333333 | strateji_d (4504), strateji_e (4505) | Aktif (isleyici PID 5002) | PID 9003 |
+
+Not: Oturum koruma dongusu hesap basina tektir, strateji sayisindan bagimsizdir.
+Ilk robot basladiginda olusur, son robot durdugundan kapanir (sahip her zaman
+ilk baslatandir).
 
 #### 5.3.5 Robot Calismazsa Ne Olur
 
@@ -316,6 +552,119 @@ Robotu olmayan hesaplarin oturumu uzatilmaz. Bu beklenen davranistir:
 | garanti | 444444 | 4504 | Aktif | Oturum canli, emir gonderilebilir |
 | garanti | 555555 | 4505 | Aktif | Oturum canli, emir gonderilebilir |
 | isbank | 666666-600000 | yok | yok | Oturum suresi dolunca duser |
+
+### 5.4 Manuel Oturum Koruma (`-o` Parametresi)
+
+#### 5.4.1 Kullanim
+
+```
+# Normal giris (koruma yok, eski davranis)
+borsa ziraat giris 123456 parola
+
+# Korunmus giris (-o parametresi ile)
+borsa ziraat giris -o 123456 parola
+
+# Koruma dongusunu durdur (oturum acik kalir)
+borsa ziraat oturum-durdur 123456
+
+# Cikis (oturum + koruma birlikte kapanir)
+borsa ziraat cikis 123456
+```
+
+#### 5.4.2 Akis Diyagrami
+
+```
+[borsa ziraat giris -o 123456 parola]
+    |
+    +-> Argumanlari parse et: -o bayragi tespit edildi
+    +-> -o bayragini ayir, kalan argumanlari adaptor_giris'e ilet
+    +-> adaptor_giris 123456 parola
+    |     +-> Normal giris akisi (SMS dahil)
+    |     +-> return 0 (basarili) veya return 1 (basarisiz)
+    |
+    +-> adaptor_giris basarili mi?
+          Hayir -> dur, koruma baslatilmaz
+          Evet  -> cekirdek_oturum_koruma_baslat ziraat 123456
+                     |
+                     +-> adaptor_oturum_suresi_parse -> timeout saniye
+                     +-> aralik = timeout / 3
+                     +-> nohup arka plan prosesi baslatilir:
+                     |     while true:
+                     |         sleep <aralik>
+                     |         adaptor_oturum_uzat 123456
+                     |         basarisiz -> 3 kez tekrar dene, sonra log + uyari
+                     |     done
+                     +-> PID -> /tmp/borsa/ziraat/123456/oturum_koruma.pid
+                     +-> sahip -> /tmp/borsa/ziraat/123456/oturum_koruma.sahip = "giris"
+                     +-> echo "Oturum koruma baslatildi (PID: XXXX)"
+```
+
+#### 5.4.3 Dosya Yapisi
+
+```
+/tmp/borsa/ziraat/123456/
+    cookies.txt              # Oturum cookie (mevcut)
+    oturum_koruma.pid         # Koruma prosesinin PID'si (-o veya robot ile)
+    oturum_koruma.sahip       # Koruma dongusunu kim baslatti: "giris" veya "robot"
+    robot.pid                 # Robot PID'si (robot_baslat ile, ayri)
+```
+
+#### 5.4.4 Kapatma Mekanizmasi
+
+Oturum koruma dongusunu durdurmak icin uc yol vardir:
+
+| Yol | Komut | Davranis |
+|-----|-------|----------|
+| Manuel durdur | `borsa ziraat oturum-durdur 123456` | Sadece koruma durur, oturum acik kalir |
+| Cikis | `borsa ziraat cikis 123456` | Oturum kapatilir + koruma durdurulur |
+| Robot durdur | `robot_durdur ziraat 123456` | Robot durur, koruma sadece sahip=robot ise durur |
+
+`oturum-durdur` komutu `oturum_koruma.pid` dosyasini okuyup `kill` ile
+prosesi sonlandirir. Sahiplik kontrolu yapmaz — her zaman durdurur.
+
+#### 5.4.5 `-o` Isleminin Cekirdek'te Uygulanmasi
+
+`-o` bayragi `borsa()` fonksiyonunda cekirdek seviyesinde islenir.
+Adaptor bundan habersizdir — adaptor_giris imzasi degismez.
+
+```bash
+# borsa() fonksiyonundaki giris case blogu:
+giris)
+    # -o bayragini kontrol et ve ayir
+    local oturum_koru=0
+    local giris_args=()
+    for arg in "$@"; do
+        if [[ "$arg" == "-o" ]]; then
+            oturum_koru=1
+        else
+            giris_args+=("$arg")
+        fi
+    done
+
+    # Normal giris (adaptor -o'yu gormez)
+    adaptor_giris "${giris_args[@]}"
+    local giris_sonuc=$?
+
+    # Giris basariliysa ve -o istenmisse koruma baslat
+    if [[ $giris_sonuc -eq 0 ]] && [[ $oturum_koru -eq 1 ]]; then
+        local hesap="${giris_args[0]}"
+        cekirdek_oturum_koruma_baslat "$kurum" "$hesap" "giris"
+    fi
+    ;;
+```
+
+#### 5.4.6 Guncellenen Ozet Tablo
+
+| Kurum | Hesap | Robot | `-o` | Oturum Koruma | Sahip |
+|-------|-------|-------|------|---------------|-------|
+| ziraat | 111111 | PID 4501 | hayir | PID 9001 (robot) | robot |
+| ziraat | 222222 | yok | evet | PID 9002 | giris |
+| garanti | 333333 | PID 4503 | evet | PID 9003 | giris |
+| garanti | 444444 | yok | hayir | yok | - |
+
+Not: garanti/333333 orneginde once `-o` ile giris yapilmis, sonra robot
+baslatilmistir. Robot mevcut koruma dongusunu kullanir, kendi dongusunu
+baslatmaz.
 
 ## 6. Adaptor Callback Arayuzu
 
@@ -350,16 +699,23 @@ Mevcut olanlara (M), yeni ekleneceklere (Y) isaret konmustur.
 | cekirdek_oturum_suresi_kaydet | Kurum icin timeout suresini kaydeder |
 | cekirdek_son_istek_guncelle | Kurum icin son istek zamanini epoch olarak kaydeder |
 | cekirdek_oturum_kalan | Kurum icin kalan oturum suresini saniye olarak dondurur |
+| cekirdek_oturum_koruma_baslat | Arka plan oturum koruma dongusunu baslatir (nohup). Mevcut PID varsa ve calisiyor ise tekrar baslatmaz. Parametreler: kurum, hesap, sahip(giris/robot). PID ve sahip dosyalarini yazar. |
+| cekirdek_oturum_koruma_durdur | PID dosyasindan prosesi okuyup kill ile sonlandirir. Dosyalari temizler. |
+| cekirdek_oturum_koruma_aktif_mi | Verilen kurum/hesap icin koruma dongusu calisiyor mu kontrol eder (PID dosyasi + kill -0). Return 0=aktif, 1=inaktif. |
 
 ## 8. Robot Motoru Fonksiyonlari
 
 | Fonksiyon | Aciklama |
 |-----------|----------|
 | robot_listele | Calisan tum robotlari PID, kurum, hesap, strateji ile listeler |
-| robot_baslat | Kurumu kilitler, oturum kontrol eder, koruma baslatir, donguyu calistirir |
-| robot_durdur | Donguyu durdurur, koruma dongusunu oldurur, ozet gosterir |
+| robot_baslat | Oturum kontrol eder, koruma baslatir, gerekirse kuyruk olusturur, donguyu calistirir |
+| robot_durdur | Donguyu durdurur, son robotsa kuyruk ve korumayı da temizler |
 | robot_oturum_koruma_baslat | Arka plan dongusunu baslatir (adaptor_oturum_uzat cagiran) |
 | robot_oturum_koruma_durdur | Arka plan dongusunu PID ile oldurur |
+| emir_kuyrugu_baslat | Hesap icin FIFO + isleyici prosesi olusturur (coklu strateji icin) |
+| emir_kuyrugu_durdur | Isleyici prosesini durdurur, FIFO ve kilit dosyalarini temizler |
+| emir_kuyrugu_gonder | Emri FIFO'ya yazar (strateji, sembol, yon, lot, fiyat, zaman) |
+| hesapta_tek_robot_mu | robotlar/ klasorundeki .pid sayisini kontrol eder. 1 ise true, >1 ise false |
 
 ## 9. Veri Kaynagi Mimarisi
 
@@ -1362,6 +1718,14 @@ Bu komutlar `borsa()` fonksiyonuna yeni alt komutlar olarak eklenir.
 Cekirdek'e oturum suresi ve son istek zamani veri yapilari eklenir.
 Ziraat adaptorune sessionTimeOutModel parse fonksiyonu eklenir.
 Ziraat adaptorune sessiz oturum uzatma fonksiyonu eklenir.
+Cekirdek'e oturum koruma fonksiyonlari eklenir:
+  - cekirdek_oturum_koruma_baslat (nohup ile arka plan dongusu)
+  - cekirdek_oturum_koruma_durdur (PID ile kill)
+  - cekirdek_oturum_koruma_aktif_mi (PID + kill -0 kontrolu)
+borsa() fonksiyonundaki giris case bloguna -o bayragi destegi eklenir.
+borsa() fonksiyonuna oturum-durdur alt komutu eklenir.
+borsa() fonksiyonundaki cikis case bloguna koruma durdurma eklenir.
+tamamlama.sh'ye -o, oturum-durdur, cikis tamamlamalari eklenir.
 
 ### 12.2 Asama 2 - Veri Katmani (Bash Array)
 
@@ -1415,6 +1779,12 @@ Oturum koruma dongusu yazilir.
 Ana dongu iskeleti kurulur (tarama -> strateji -> emir).
 Veri kaynagi ile entegrasyon yapilir.
 vt_robot_log_yaz entegrasyonu yapilir.
+Coklu strateji destegi eklenir:
+  - robotlar/ klasor yapisi (strateji basina ayri PID dosyasi).
+  - emir_kuyrugu_baslat, emir_kuyrugu_durdur, emir_kuyrugu_gonder yazilir.
+  - Kuyruk isleyici: celiski kontrolu, bakiye kontrolu (flock), lot kontrolu.
+  - Tek robot optimizasyonu: tek strateji ise kuyruk atlanir, dogrudan gonderilir.
+  - robot_durdur guncellenir: son robot durdugundan kuyruk ve koruma temizlenir.
 
 ### 12.8 Asama 8 - Strateji Katmani
 

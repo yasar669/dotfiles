@@ -1,0 +1,11 @@
+{
+    "yaml.schemaStore.enable": true,
+    "yaml.customTags": [],
+    "yaml.schemas": {
+        "https://json.schemastore.org/github-workflow.json": "**/.github/workflows/*.yml"
+    },
+    "yaml.schemaStore.url": "",
+    "[yaml]": {
+        "editor.tabSize": 2
+    }
+}

@@ -1,0 +1,213 @@
+# Supabase Yerel Kurulum - Docker Compose
+# Kullanim: docker compose up -d
+# Durdurma: docker compose stop
+# Silme:    docker compose down -v
+
+version: "3.8"
+
+services:
+  # PostgreSQL - Ana veritabani motoru
+  db:
+    image: supabase/postgres:15.1.1.61
+    container_name: borsa_postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_sifresi_yerel}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+    volumes:
+      - borsa_pgdata:/var/lib/postgresql/data
+      - ./sema.sql:/docker-entrypoint-initdb.d/99-sema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - borsa_net
+
+  # PostgREST - PostgreSQL uzerine otomatik REST API
+  rest:
+    image: postgrest/postgrest:v12.0.2
+    container_name: borsa_postgrest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD:-postgres_sifresi_yerel}@db:5432/${POSTGRES_DB:-postgres}
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS:-public}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    networks:
+      - borsa_net
+
+  # GoTrue - Kimlik dogrulama (PostgREST bagimli)
+  auth:
+    image: supabase/gotrue:v2.143.0
+    container_name: borsa_gotrue
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: http://localhost:${KONG_HTTP_PORT:-8001}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD:-postgres_sifresi_yerel}@db:5432/${POSTGRES_DB:-postgres}
+      GOTRUE_SITE_URL: http://localhost:3002
+      GOTRUE_URI_ALLOW_LIST: ""
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+    networks:
+      - borsa_net
+
+  # Kong - API Gateway (tek giris noktasi)
+  kong:
+    image: kong:2.8.1
+    container_name: borsa_kong
+    restart: unless-stopped
+    depends_on:
+      - rest
+      - auth
+    ports:
+      - "${KONG_HTTP_PORT:-8001}:8000"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+    configs:
+      - source: kong_yapilandirma
+        target: /var/lib/kong/kong.yml
+    networks:
+      - borsa_net
+
+  # Supabase Studio - Web tabanli yonetim arayuzu
+  studio:
+    image: supabase/studio:20240101-8e4a094
+    container_name: borsa_studio
+    restart: unless-stopped
+    depends_on:
+      - kong
+    ports:
+      - "${STUDIO_PORT:-3002}:3000"
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_sifresi_yerel}
+      DEFAULT_ORGANIZATION_NAME: borsa
+      DEFAULT_PROJECT_NAME: borsa_sistemi
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: http://localhost:${KONG_HTTP_PORT:-8001}
+      SUPABASE_ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU}
+    networks:
+      - borsa_net
+
+  # pg-meta - Studio icin PostgreSQL metadata servisi
+  meta:
+    image: supabase/postgres-meta:v0.75.0
+    container_name: borsa_pgmeta
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: ${POSTGRES_DB:-postgres}
+      PG_META_DB_USER: supabase
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres_sifresi_yerel}
+    networks:
+      - borsa_net
+
+volumes:
+  borsa_pgdata:
+    name: borsa_pgdata
+
+networks:
+  borsa_net:
+    name: borsa_net
+
+configs:
+  kong_yapilandirma:
+    content: |
+      _format_version: "2.1"
+      _transform: true
+      services:
+        - name: rest-v1
+          url: http://rest:3000
+          routes:
+            - name: rest-v1
+              strip_path: true
+              paths:
+                - /rest/v1/
+          plugins:
+            - name: cors
+            - name: key-auth
+              config:
+                hide_credentials: false
+                key_names:
+                  - apikey
+        - name: auth-v1
+          url: http://auth:9999
+          routes:
+            - name: auth-v1
+              strip_path: true
+              paths:
+                - /auth/v1/
+          plugins:
+            - name: cors
+            - name: key-auth
+              config:
+                hide_credentials: false
+                key_names:
+                  - apikey
+      consumers:
+        - username: anon
+          keyauth_credentials:
+            - key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+        - username: service_role
+          keyauth_credentials:
+            - key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      plugins:
+        - name: cors
+          config:
+            origins:
+              - "*"
+            methods:
+              - GET
+              - POST
+              - PUT
+              - PATCH
+              - DELETE
+              - OPTIONS
+            headers:
+              - Accept
+              - Accept-Version
+              - Content-Length
+              - Content-MD5
+              - Content-Type
+              - Date
+              - apikey
+              - Authorization
+              - Prefer
+              - Range
+            exposed_headers:
+              - Content-Range
+              - Range
+            credentials: true
+            max_age: 3600
