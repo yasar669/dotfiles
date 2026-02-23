@@ -1203,7 +1203,7 @@ tum_bakiyeler() {
             hesap_no=$(basename "$hesap_klasoru")
 
             # Oturum acik mi kontrol et
-            [[ -f "${hesap_klasoru}oturum.cookie" ]] || continue
+            [[ -f "${hesap_klasoru}${_CEKIRDEK_DOSYA_COOKIE}" ]] || continue
 
             # Adaptor yukle ve bakiye al
             local surucu="${BORSA_KLASORU}/adaptorler/${kurum_adi}.sh"
@@ -1257,7 +1257,7 @@ tum_portfoyler() {
             [[ -d "$hesap_klasoru" ]] || continue
             local hesap_no
             hesap_no=$(basename "$hesap_klasoru")
-            [[ -f "${hesap_klasoru}oturum.cookie" ]] || continue
+            [[ -f "${hesap_klasoru}${_CEKIRDEK_DOSYA_COOKIE}" ]] || continue
 
             local surucu="${BORSA_KLASORU}/adaptorler/${kurum_adi}.sh"
             [[ -f "$surucu" ]] || continue
@@ -1295,7 +1295,7 @@ tum_emirler() {
             [[ -d "$hesap_klasoru" ]] || continue
             local hesap_no
             hesap_no=$(basename "$hesap_klasoru")
-            [[ -f "${hesap_klasoru}oturum.cookie" ]] || continue
+            [[ -f "${hesap_klasoru}${_CEKIRDEK_DOSYA_COOKIE}" ]] || continue
 
             local surucu="${BORSA_KLASORU}/adaptorler/${kurum_adi}.sh"
             [[ -f "$surucu" ]] || continue
@@ -1334,7 +1334,7 @@ tum_oturumlar() {
             [[ -d "$hesap_klasoru" ]] || continue
             local hesap_no
             hesap_no=$(basename "$hesap_klasoru")
-            [[ -f "${hesap_klasoru}oturum.cookie" ]] || continue
+            [[ -f "${hesap_klasoru}${_CEKIRDEK_DOSYA_COOKIE}" ]] || continue
 
             # Kalan sure
             local kalan="?"
@@ -1703,10 +1703,19 @@ borsa() {
         emir)
             # BIST pazar-emir turu uyumluluk kontrolu
             if declare -f bist_pazar_emir_kontrol > /dev/null 2>&1; then
+                local _emir_sembol="${1:-}"
                 local _emir_fiyat="${4:-}"
                 local _emir_turu="LIMIT"
                 [[ "${_emir_fiyat,,}" == "piyasa" ]] && _emir_turu="PIYASA"
-                bist_pazar_emir_kontrol "YILDIZ" "$_emir_turu" "GUN" || return 1
+                # Pazar kodunu tespit et: sembol soneki kontrolu
+                # YAKIN izleme hisseleri genelde .E soneki tasir
+                # veya _BORSA_YAKIN_LISTESI degiskeninde tanimlidir
+                local _emir_pazar="YILDIZ"
+                if [[ -n "${_BORSA_YAKIN_LISTESI:-}" ]] && \
+                   [[ ",${_BORSA_YAKIN_LISTESI}," == *",${_emir_sembol^^},"* ]]; then
+                    _emir_pazar="YAKIN"
+                fi
+                bist_pazar_emir_kontrol "$_emir_pazar" "$_emir_turu" "GUN" || return 1
             fi
             adaptor_emir_gonder "$@"
             # Veritabanina emir kaydet

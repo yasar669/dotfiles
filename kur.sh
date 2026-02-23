@@ -348,6 +348,23 @@ _adim_supabase() {
         fi
     fi
 
+    # 4b. PostgREST API erisim testi
+    local anon_key_test
+    anon_key_test=$(grep "^ANON_KEY=" "$vt_dizin/.env" 2>/dev/null | cut -d= -f2)
+    if [[ -n "$anon_key_test" ]]; then
+        _bilgi "PostgREST API testi yapiliyor..."
+        local _postgrest_bekleme
+        for _postgrest_bekleme in $(seq 1 15); do
+            if curl -sf "http://localhost:8001/rest/v1/" \
+                -H "apikey: $anon_key_test" > /dev/null 2>&1; then
+                _ayrintili "PostgREST API erisilebilir."
+                break
+            fi
+            [[ "$_postgrest_bekleme" -eq 15 ]] && _uyari "PostgREST API'ye erisilemedi. Kong servisi kontrol edin."
+            sleep 2
+        done
+    fi
+
     # 5. supabase.ayarlar.sh dosyasini olustur
     if [[ ! -f "$vt_dizin/supabase.ayarlar.sh" ]]; then
         local anon_key
