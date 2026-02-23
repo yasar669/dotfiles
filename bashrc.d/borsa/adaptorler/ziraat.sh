@@ -7,8 +7,14 @@
 # HTTP istekleri: cekirdek.sh'daki cekirdek_istek_at() ile yapilir.
 
 # shellcheck disable=SC2034
-ADAPTOR_ADI="ziraat"
-ADAPTOR_SURUMU="1.0.0"
+# Degisken onceki source'dan readonly kalabilir — hatadan kacinmak
+# icin sadece farkli degerde veya tanimsizsa ata.
+if [[ "${ADAPTOR_ADI:-}" != "ziraat" ]]; then
+    ADAPTOR_ADI="ziraat" 2>/dev/null || true
+fi
+if [[ "${ADAPTOR_SURUMU:-}" != "1.0.0" ]]; then
+    ADAPTOR_SURUMU="1.0.0" 2>/dev/null || true
+fi
 
 # Ayarlar dosyasini yukle
 # shellcheck source=/home/yasar/dotfiles/bashrc.d/borsa/adaptorler/ziraat.ayarlar.sh

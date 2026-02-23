@@ -1654,7 +1654,14 @@ borsa() {
 
     # Onceki adaptorunkinden farkli ise degiskenleri temizle
     if [[ "${_CEKIRDEK_SON_ADAPTOR:-}" != "$kurum" ]]; then
-        unset ADAPTOR_ADI ADAPTOR_SURUMU 2>/dev/null || true
+        # readonly degiskenler bash'te kaldirilamaz (unset/declare +r calismaz).
+        # Hata mesajlarini bastirmak icin sadece tanimsiz ise unset dene.
+        if ! readonly -p 2>/dev/null | grep -q 'ADAPTOR_ADI'; then
+            unset ADAPTOR_ADI 2>/dev/null || true
+        fi
+        if ! readonly -p 2>/dev/null | grep -q 'ADAPTOR_SURUMU'; then
+            unset ADAPTOR_SURUMU 2>/dev/null || true
+        fi
         _CEKIRDEK_SON_ADAPTOR="$kurum"
     fi
 
