@@ -97,16 +97,20 @@ _backtest_supabase_oku() {
 
     # JSON parse — jq varsa kullan
     local satir_sayisi=0
+    local onceki_kapanis=""
     if command -v jq > /dev/null 2>&1; then
         while IFS=$'\t' read -r tarih acilis yuksek dusuk kapanis hacim_d; do
             [[ -z "$kapanis" ]] && continue
+            tarih=$(echo "$tarih" | cut -c1-10)
             _BACKTEST_VERI_TARIH+=("$tarih")
             _BACKTEST_VERI_FIYAT+=("$kapanis")
             _BACKTEST_VERI_ACILIS+=("${acilis:-0}")
             _BACKTEST_VERI_YUKSEK+=("${yuksek:-0}")
             _BACKTEST_VERI_DUSUK+=("${dusuk:-0}")
             _BACKTEST_VERI_HACIM+=("${hacim_d:-0}")
+            _BACKTEST_VERI_SEANS+=("Surekli Islem")
             satir_sayisi=$((satir_sayisi + 1))
+            onceki_kapanis="$kapanis"
         done < <(echo "$yanit" | jq -r '.[] | "\(.tarih)\t\(.acilis)\t\(.yuksek)\t\(.dusuk)\t\(.kapanis)\t\(.hacim)"' 2>/dev/null)
     else
         while IFS= read -r satir; do
@@ -126,7 +130,9 @@ _backtest_supabase_oku() {
             _BACKTEST_VERI_YUKSEK+=("${yuksek:-0}")
             _BACKTEST_VERI_DUSUK+=("${dusuk:-0}")
             _BACKTEST_VERI_HACIM+=("${hacim_d:-0}")
+            _BACKTEST_VERI_SEANS+=("Surekli Islem")
             satir_sayisi=$((satir_sayisi + 1))
+            onceki_kapanis="$kapanis"
         done < <(echo "$yanit" | tr '[{' '\n' | grep '"kapanis"')
     fi
 
@@ -135,7 +141,46 @@ _backtest_supabase_oku() {
         return 1
     fi
 
+    # Tavan/taban ve degisim hesapla (ohlcv tablosunda bu sutunlar yok)
+    # BIST kurali: tavan = onceki kapanis * 1.10, taban = onceki kapanis * 0.90
+    _backtest_tavan_taban_hesapla
+
     return 0
+}
+
+# _backtest_tavan_taban_hesapla
+# _BACKTEST_VERI_FIYAT dizisinden tavan/taban/degisim hesaplar.
+# BIST kurali: tavan = onceki_kapanis * 1.10, taban = onceki_kapanis * 0.90
+# Ilk gunde kendi kapanisi referans alinir.
+_backtest_tavan_taban_hesapla() {
+    local toplam=${#_BACKTEST_VERI_FIYAT[@]}
+    [[ "$toplam" -eq 0 ]] && return 1
+
+    _BACKTEST_VERI_TAVAN=()
+    _BACKTEST_VERI_TABAN=()
+    _BACKTEST_VERI_DEGISIM=()
+
+    local i onceki_fiyat="" tavan taban degisim
+
+    for ((i = 0; i < toplam; i++)); do
+        local fiyat="${_BACKTEST_VERI_FIYAT[$i]}"
+
+        if [[ -z "$onceki_fiyat" ]]; then
+            # Ilk gun: kendi fiyatini referans al
+            onceki_fiyat="$fiyat"
+        fi
+
+        tavan=$(echo "scale=2; $onceki_fiyat * 1.10" | bc)
+        taban=$(echo "scale=2; $onceki_fiyat * 0.90" | bc)
+        degisim=$(echo "scale=2; ($fiyat - $onceki_fiyat) / $onceki_fiyat * 100" | bc 2>/dev/null)
+        [[ -z "$degisim" ]] && degisim="0"
+
+        _BACKTEST_VERI_TAVAN+=("$tavan")
+        _BACKTEST_VERI_TABAN+=("$taban")
+        _BACKTEST_VERI_DEGISIM+=("$degisim")
+
+        onceki_fiyat="$fiyat"
+    done
 }
 
 # _backtest_csv_oku <dosya_yolu> <sembol>

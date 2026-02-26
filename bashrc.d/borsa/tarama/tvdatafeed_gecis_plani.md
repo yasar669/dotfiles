@@ -32,14 +32,14 @@ Asagidaki dosya ve kod bloklari kurum oturumu uzerinden veri cekmektedir:
 
 | Dosya | Bolum/Satirlar | Islem | Satir Sayisi |
 |-------|----------------|-------|--------------|
-| `_wss_daemon.py` | Tumunu | Ziraat SignalR WSS canli tick | 652 |
+| `_wss_daemon.py` | Tumunu | Ziraat SignalR WSS canli tick | 651 |
 | `_mum_birlestirici.py` | Tumunu | WSS tick -> OHLCV donusumu | 427 |
 | `ziraat.sh` | Bolum 5 (satir ~2069-2487) | adaptor_wss_* fonksiyonlari | ~418 |
-| `ziraat.ayarlar.sh` | Bolum 6 (satir ~186-213) | WSS sabitleri | ~27 |
-| `fiyat_kaynagi.sh` | Tumunu (589 satir) | Kurum REST fiyat cekim + failover + polling | 589 |
+| `ziraat.ayarlar.sh` | Bolum 6 (satir ~186-203) | WSS sabitleri | ~18 |
+| `fiyat_kaynagi.sh` | Tumunu (586 satir) | Kurum REST fiyat cekim + failover + polling | 586 |
 | `ohlcv.sh` | Bolum 6 (satir ~948-1100) | mum_birlestirici bash sarmalayicilari | ~152 |
-| `ohlcv.sh` | canli_veri_* (satir ~1240-1650) | WSS/REST canli veri pipeline | ~410 |
-| **Toplam** | | | **~2675 satir** |
+| `ohlcv.sh` | canli_veri_* (satir ~1214-1563) | WSS/REST canli veri pipeline | ~350 |
+| **Toplam** | | | **~2602 satir** |
 
 ### 2.3 Kurum Bagimsiz Dosyalar (Kalacak)
 
@@ -225,11 +225,11 @@ Bu veri sayesinde mum birlestirici gereksiz olur cunku TradingView gun ici OHLC 
 
 | Dosya | Satir | Neden |
 |-------|-------|-------|
-| `tarama/_wss_daemon.py` | 652 | Ziraat SignalR WSS daemon — tvDatafeed canli stream ile degistirilecek |
+| `tarama/_wss_daemon.py` | 651 | Ziraat SignalR WSS daemon — tvDatafeed canli stream ile degistirilecek |
 | `tarama/_mum_birlestirici.py` | 427 | WSS tick -> OHLCV donusumu — tvDatafeed dogrudan OHLC gonderdigi icin gereksiz |
-| `tarama/fiyat_kaynagi.sh` | 589 | Kurum REST fiyat cekim + onbellek + failover + polling — tvDatafeed ile degistirilecek |
-| `tarama/canli_veri_plani.md` | 603 | Kurum WSS'e dayali plan — gecersiz olacak, yeni plan bu belge |
-| **Toplam** | **2271** | |
+| `tarama/fiyat_kaynagi.sh` | 586 | Kurum REST fiyat cekim + onbellek + failover + polling — tvDatafeed ile degistirilecek |
+| `tarama/canli_veri_plani.md` | 602 | Kurum WSS'e dayali plan — gecersiz olacak, yeni plan bu belge |
+| **Toplam** | **2266** | |
 
 ### 5.2 Kismi Kaldirilacak Kod Bloklari
 
@@ -237,18 +237,28 @@ Bu veri sayesinde mum birlestirici gereksiz olur cunku TradingView gun ici OHLC 
 |-------|-------------------|---------------|--------------|
 | `ziraat.sh` | Bolum 5: WSS fonksiyonlari | ~2069-2487 | ~418 |
 | `ziraat.sh` | `adaptor_hisse_bilgi_al` fonksiyonu | ~2013-2063 | ~50 |
-| `ziraat.ayarlar.sh` | Bolum 6: WSS ayarlari | ~186-213 | ~27 |
+| `ziraat.ayarlar.sh` | Bolum 6: WSS ayarlari | ~186-203 | ~18 |
 | `ohlcv.sh` | Bolum 6: mum_birlestirici sarmalayicilari | ~948-1100 | ~152 |
-| `ohlcv.sh` | canli_veri_baslat/durdur/durum fonksiyonlari | ~1240-1650 | ~410 |
-| **Toplam** | | | **~1057** |
+| `ohlcv.sh` | canli_veri_baslat/durdur/durum fonksiyonlari | ~1214-1563 | ~350 |
+| `cekirdek.sh` | `fiyat_kaynagi.sh` source ve dispatcher | satir 55-57, 1766-1783, 2092-2095 | ~22 |
+| **Toplam** | | | **~1010** |
+
+### 5.2.1 cekirdek.sh Guncelleme Detayi
+
+`cekirdek.sh` dosyasi planda eksikti. Asagidaki noktalar guncellenmeli:
+
+- **Satir 55-57:** `fiyat_kaynagi.sh` source ediliyor. Kaldirilacak, yerine `canli_veri.sh` source edilecek.
+- **Satir 1766-1775:** `fiyat_kaynagi_baslat`, `fiyat_kaynagi_durdur`, `fiyat_kaynagi_goster`, `fiyat_kaynagi_ayarla` dispatcher'lari. `canli_veri_*` fonksiyonlariyla degistirilecek.
+- **Satir 1783:** `fiyat_kaynagi_fiyat_al "$sembol"` cagrisi. `canli_fiyat_al` ile degistirilecek.
+- **Satir 2092-2095:** `adaptor_hisse_bilgi_al` birincil dal ve `fiyat_kaynagi_fiyat_al` fallback dali. `adaptor_hisse_bilgi_al` ziraat.sh'den kaldirilinca birincil dal bos dusecegi icin, **tum 2092-2095 blogu** tek bir `canli_fiyat_al` cagrisiyla degistirilecek.
 
 ### 5.3 Toplam Kaldirilacak Kod
 
 ```
-Tamamen kaldirilacak dosyalar:  2271 satir
-Kismi kaldirilacak kodlar:      1057 satir
+Tamamen kaldirilacak dosyalar:  2266 satir
+Kismi kaldirilacak kodlar:      1010 satir (cekirdek.sh dahil)
 --------------------------------------------
-TOPLAM KALDIRILACAK:           ~3328 satir
+TOPLAM KALDIRILACAK:           ~3276 satir
 ```
 
 ### 5.4 Degistirilecek Plan Dosyalari
@@ -328,6 +338,18 @@ Fonksiyonlar:
   canli_fiyat_al(sembol)     -> /tmp/borsa/_canli/<SEMBOL>.json'dan oku
                                 (eski fiyat_kaynagi_fiyat_al'in yerine gecer)
   canli_veri_seans_bekle()   -> seans otomasyonu
+
+Cikti formati (canli_fiyat_al — geriye uyumlu):
+  Robot motoru (motor.sh L440) ve cekirdek.sh, fiyat_kaynagi_fiyat_al'in
+  pipe-ayracli cikti formatini bekler. canli_fiyat_al ayni formati korumal:
+    stdout: fiyat|tavan|taban|degisim|hacim|seans
+  JSON dosyasindan okunan alanlar bu formata donusturulur:
+    lp -> fiyat
+    prev_close_price * 1.10 -> tavan  (veya borsadan alinan gercek tavan)
+    prev_close_price * 0.90 -> taban  (veya borsadan alinan gercek taban)
+    ch -> degisim
+    volume -> hacim
+    "ACIK" veya "KAPALI" -> seans  (seans durumu kontroluyle)
 ```
 
 ### 6.3 `_tvdatafeed_main.py`'ye Eklenecek Fonksiyonlar
@@ -358,7 +380,7 @@ Mevcut canli veri pipeline kodu kaldirilacak, yerine `canli_veri.sh` source edil
 ```
 [KALDIRILACAK — ohlcv.sh]
   Bolum 6: mum_birlestirici_baslat/durdur/durum  (~152 satir)
-  canli_veri_baslat/durdur/durum/seans_bekle      (~410 satir)
+  canli_veri_baslat/durdur/durum/seans_bekle      (~350 satir)
 
 [EKLENECEK — ohlcv.sh basina]
   source "${BORSA_KLASORU}/tarama/canli_veri.sh"
@@ -374,30 +396,58 @@ Mevcut canli veri pipeline kodu kaldirilacak, yerine `canli_veri.sh` source edil
 | `ohlcv.sh` | Guncelleme | ~50 (source + ufak duzenleme) |
 | **Toplam** | | **~950 satir** |
 
-Net fark: ~3328 satir kaldirilacak, ~950 satir eklenecek = **~2378 satir azalma**.
+Net fark: ~3276 satir kaldirilacak, ~950 satir eklenecek = **~2326 satir azalma**.
 
 ## 7. Gecis Suresince Etkilenecek Diger Moduller
 
 ### 7.1 Robot Motoru (`robot/motor.sh`)
 
-Robot motoru canli fiyat icin `fiyat_kaynagi_fiyat_al()` cagiriyor. Gecis sonrasi:
+Robot motoru canli fiyat icin `fiyat_kaynagi_fiyat_al()` cagiriyor. Kesin etkilenen satirlar:
+
+- **Satir 119:** `_FIYAT_KAYNAGI_KURUM` degiskeni kontrolu — `canli_veri` degiskenine donusecek.
+- **Satir 121:** `fiyat_kaynagi_baslat` cagrisi — `canli_veri_baslat` ile degisecek.
+- **Satir 433:** `fiyat_kaynagi_fiyat_al "$sembol"` cagrisi — `canli_fiyat_al "$sembol"` ile degisecek.
 
 ```
-ONCEKI: fiyat_kaynagi_fiyat_al "THYAO"  -> kurum REST -> fiyat|tavan|taban|degisim|hacim
+ONCEKI: fiyat_kaynagi_fiyat_al "THYAO"  -> kurum REST -> fiyat|tavan|taban|degisim|hacim|seans
 SONRAKI: canli_fiyat_al "THYAO"         -> /tmp/borsa/_canli/THYAO.json -> ayni format
 ```
 
-Robot motorundeki cagri noktalarInin guncellenmesi gerekir.
+### 7.2 Cekirdek (`cekirdek.sh`)
 
-### 7.2 MCP Sunucu (`mcp_sunucular/araclar/borsa_veri_araclari.py`)
+cekirdek.sh, fiyat_kaynagi.sh'yi source eder ve `borsa ... fiyat` komut dagitimini yapar. 4 farkli noktada guncelleme gerekir (Bolum 5.2.1'e bakiniz).
 
-MCP araci fonksiyonlarinin veri kaynagi referanslarinin guncellenmesi gerekebilir.
+### 7.3 MCP Sunucu (`mcp_sunucular/araclar/borsa_veri_araclari.py`)
 
-### 7.3 Strateji Katmani (`strateji/`)
+Yapilan taramada bu dosyada `fiyat_kaynagi`, `hisse_bilgi_al`, `wss`, `canli_veri`, `mum_birlestirici` kelimelerinin **hicbiri gecmiyor**. Dogrudan etkilenmiyor. Ancak yeni `canli_fiyat_al` fonksiyonu MCP araci olarak eklenebilir (opsiyonel iyilestirme, zorunlu degil).
+
+### 7.4 Adaptor Plan Dosyasi (`adaptorler/plan.md`)
+
+`plan.md` satirlarinda `adaptor_hisse_bilgi_al` (satir 146 ve 233) referanslari var. Bu fonksiyon kaldirildiginda plan dosyasi guncellenmeli.
+
+### 7.5 Tarayici (`tarama/tarayici.sh`)
+
+`tarayici.sh` dosyasinin satir 198-200'unda `_FIYAT_KAYNAGI_KURUM` ve `_FIYAT_KAYNAGI_HESAP` degiskenleri kullanilmaktadir:
+
+```bash
+if [[ -n "${_FIYAT_KAYNAGI_KURUM:-}" ]] && [[ -n "${_FIYAT_KAYNAGI_HESAP:-}" ]]; then
+    kurum="$_FIYAT_KAYNAGI_KURUM"
+    hesap="$_FIYAT_KAYNAGI_HESAP"
+fi
+```
+
+Bu degiskenler `fiyat_kaynagi.sh` tarafindan set ediliyor. `fiyat_kaynagi.sh` silindiginde bu degiskenler de gidecek. Gecis sirasinda su seceneklerden biri uygulanmali:
+
+- **Secenek A (Onerilen):** `canli_veri.sh` icerisinde `_CANLI_VERI_KURUM` ve `_CANLI_VERI_HESAP` degiskenleri tanimlanir. `tarayici.sh` L198-200 bu yeni degiskenleri kullanacak sekilde guncellenir.
+- **Secenek B:** Bu blok tamamen kaldirilir. Portfoy verisi zaten `_BORSA_VERI_SEMBOLLER` global dizisinde mevcut oldugunda kurum/hesap bilgisine gerek kalmaz.
+
+Etkilenen satirlar: 198, 199, 200 (3 satir).
+
+### 7.6 Strateji Katmani (`strateji/`)
 
 `mum_al()` fonksiyonu degismiyor (zaten tvDatafeed tabanli). Stratejiler etkilenmez.
 
-### 7.4 Backtest Katmani (`backtest/`)
+### 7.7 Backtest Katmani (`backtest/`)
 
 `mum_al()` fonksiyonu degismiyor. Backtest etkilenmez.
 
@@ -475,6 +525,7 @@ Kapsam:
 - `ziraat.sh` Bolum 5 (WSS) ve `adaptor_hisse_bilgi_al` kaldir.
 - `ziraat.ayarlar.sh` Bolum 6 (WSS ayarlari) kaldir.
 - `ohlcv.sh` Bolum 6 ve canli_veri fonksiyonlarini kaldir, yerine `canli_veri.sh` source et.
+- `cekirdek.sh` satir 55-57, 1766-1783, 2092-2095 guncelle (Bolum 5.2.1 detayi).
 - `canli_veri_plani.md` arsivle veya sil.
 
 Tahmini sure: 2-3 saat.
@@ -482,9 +533,12 @@ Tahmini sure: 2-3 saat.
 ### 9.4 Asama 4 — Robot Motoru ve Diger Entegrasyonlar
 
 Kapsam:
-- `robot/motor.sh` icindeki `fiyat_kaynagi_fiyat_al` cagrilarini `canli_fiyat_al` ile degistir.
-- MCP sunucu veri araclari guncelle.
-- Plan dosyalarini guncelle (`ohlcv_plani.md`, `sistem_plani.md`, `adaptorler/plan.md`).
+- `robot/motor.sh` satir 119, 121, 433 guncelle (Bolum 7.1 detayi).
+- `tarama/tarayici.sh` satir 198-200 guncelle (Bolum 7.5 detayi).
+- Plan dosyalarini guncelle:
+  - `ohlcv_plani.md` Bolum 5.1, 5.3 ve `canli_veri_plani.md` referanslari (satir 37, 57, 428, 465, 629, 792).
+  - `sistem_plani.md` Bolum 9 (satir 720+, veri kaynagi mimarisi).
+  - `adaptorler/plan.md` satir 146, 233 (`adaptor_hisse_bilgi_al` referanslari).
 
 Tahmini sure: 2-3 saat.
 
@@ -517,11 +571,20 @@ Gecise baslamadan once su adimlar tamamlanmalidir:
 ```
 [ ] TradingView hesabi anonim mi girisli mi karar verildi
 [ ] tvDatafeed canli stream'in TradingView WS protokoluyle calismasi dogrulandi
+    (Asama 1 prototipi bunu dogrulamak icindir — basarisizsa plan revize edilir)
 [ ] Canli stream'de sembol limiti (kac hisse ayni anda izlenebilir) test edildi
 [ ] 15dk gecikme kabul edildi VEYA girisli mod icin hesap hazirlandi
 [ ] Mevcut calisan sistemin yedegi alindi (git commit/tag)
 [ ] Robot motoru su anda aktif degilse gecis guvenli (aktifse once durdurulmali)
+[ ] info.sh ve osmanli.sh adaptorlerinde WSS/hisse_bilgi_al YOK — etkilenmez (dogrulandi)
+[ ] MCP borsa_veri_araclari.py'de fiyat_kaynagi referansi YOK — etkilenmez (dogrulandi)
+[ ] tamamlama.sh'de fiyat_kaynagi/canli_veri referansi YOK — etkilenmez (dogrulandi)
+[ ] tarayici.sh'nin _FIYAT_KAYNAGI_KURUM/_HESAP bagimliligi tespit edildi — Asama 4'te guncellenmeli
 ```
+
+## 10.1 Dogrulama Notu
+
+Asama 1 (prototip) buyuk olcude kesfedici bir adimdir. TradingView'in `quote_create_session` protokolu gayri resmi oldugundan, canli stream'in BIST icin gercekten calisip calismadigini, gecikme degerlerini ve sembol limitini bu asamada somut olarak olcmek gerekir. Prototip basarisiz olursa (ornegin TradingView canli stream'i engellerse) gecis plani durdurulacak ve eski kurum-bazli sistem korunacaktir.
 
 ## 11. Geri Donus Plani
 

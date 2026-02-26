@@ -282,21 +282,31 @@ _backtest_sonuclari_listele() {
     printf "%-6s %-20s %-12s %-12s %-10s %-10s %-8s %-8s\n" \
         "-----" "-------------------" "----------" "----------" "--------" "--------" "------" "------"
 
-    echo "$yanit" | tr '[{' '\n' | grep '"id"' | while IFS= read -r satir; do
-        local id strateji bas_tarih bit_tarih getiri dusus sharpe basari
-        id=$(echo "$satir" | grep -o '"id":[0-9]*' | cut -d: -f2)
-        strateji=$(echo "$satir" | grep -o '"strateji":"[^"]*"' | cut -d'"' -f4)
-        bas_tarih=$(echo "$satir" | grep -o '"baslangic_tarih":"[^"]*"' | cut -d'"' -f4)
-        bit_tarih=$(echo "$satir" | grep -o '"bitis_tarih":"[^"]*"' | cut -d'"' -f4)
-        getiri=$(echo "$satir" | grep -o '"toplam_getiri":[0-9.-]*' | cut -d: -f2)
-        dusus=$(echo "$satir" | grep -o '"maks_dusus":[0-9.-]*' | cut -d: -f2)
-        sharpe=$(echo "$satir" | grep -o '"sharpe_orani":[0-9.-]*' | cut -d: -f2)
-        basari=$(echo "$satir" | grep -o '"basari_orani":[0-9.-]*' | cut -d: -f2)
+    if command -v jq > /dev/null 2>&1; then
+        echo "$yanit" | jq -r '.[] | "\(.id)\t\(.strateji)\t\(.baslangic_tarih)\t\(.bitis_tarih)\t\(.toplam_getiri)\t\(.maks_dusus)\t\(.sharpe_orani)\t\(.basari_orani)"' | \
+        while IFS=$'\t' read -r id strateji bas_tarih bit_tarih getiri dusus sharpe basari; do
+            printf "%-6s %-20s %-12s %-12s %-10s %-10s %-8s %-8s\n" \
+                "${id:-}" "${strateji:-}" "${bas_tarih:-}" "${bit_tarih:-}" \
+                "${getiri:-}" "${dusus:-}" "${sharpe:-}" "${basari:-}"
+        done
+    else
+        # jq yoksa json_satir bazli parse (semboller dizisi parcalanabilir)
+        echo "$yanit" | tr '}' '\n' | grep '"id"' | while IFS= read -r satir; do
+            local id strateji bas_tarih bit_tarih getiri dusus sharpe basari
+            id=$(echo "$satir" | grep -o '"id":[0-9]*' | cut -d: -f2)
+            strateji=$(echo "$satir" | grep -o '"strateji":"[^"]*"' | cut -d'"' -f4)
+            bas_tarih=$(echo "$satir" | grep -o '"baslangic_tarih":"[^"]*"' | cut -d'"' -f4)
+            bit_tarih=$(echo "$satir" | grep -o '"bitis_tarih":"[^"]*"' | cut -d'"' -f4)
+            getiri=$(echo "$satir" | grep -o '"toplam_getiri":[0-9.-]*' | cut -d: -f2)
+            dusus=$(echo "$satir" | grep -o '"maks_dusus":[0-9.-]*' | cut -d: -f2)
+            sharpe=$(echo "$satir" | grep -o '"sharpe_orani":[0-9.-]*' | cut -d: -f2)
+            basari=$(echo "$satir" | grep -o '"basari_orani":[0-9.-]*' | cut -d: -f2)
 
-        printf "%-6s %-20s %-12s %-12s %-10s %-10s %-8s %-8s\n" \
-            "${id:-}" "${strateji:-}" "${bas_tarih:-}" "${bit_tarih:-}" \
-            "${getiri:-}" "${dusus:-}" "${sharpe:-}" "${basari:-}"
-    done
+            printf "%-6s %-20s %-12s %-12s %-10s %-10s %-8s %-8s\n" \
+                "${id:-}" "${strateji:-}" "${bas_tarih:-}" "${bit_tarih:-}" \
+                "${getiri:-}" "${dusus:-}" "${sharpe:-}" "${basari:-}"
+        done
+    fi
 }
 
 # _backtest_detay_goster <backtest_id>

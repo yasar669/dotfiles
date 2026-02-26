@@ -276,9 +276,13 @@ _backtest_ana_dongu() {
         _backtest_portfoy_deger_guncelle
 
         # Strateji degerlendir
+        # NOT: $() alt kabuk olusturdugu icin strateji durum degiskenleri
+        # kaybolur. Gecici dosya uzerinden sinyal yakalanir.
         local sinyal=""
+        local _sinyal_dosya="/tmp/_bt_sinyal_$$"
         if declare -f strateji_degerlendir > /dev/null 2>&1; then
-            sinyal=$(strateji_degerlendir "$sembol" "$fiyat" "$tavan" "$taban" "$degisim" "$hacim" "$seans")
+            strateji_degerlendir "$sembol" "$fiyat" "$tavan" "$taban" "$degisim" "$hacim" "$seans" > "$_sinyal_dosya"
+            sinyal=$(<"$_sinyal_dosya")
         fi
 
         # Isitma donemi: sinyalleri yoksay
@@ -298,9 +302,12 @@ _backtest_ana_dongu() {
             if [[ "$yon" == "ALIS" || "$yon" == "SATIS" ]] && [[ -n "$lot" ]]; then
                 [[ -z "$emir_fiyat" ]] && emir_fiyat="$fiyat"
 
-                local sonuc
-                sonuc=$(_backtest_emir_isle "$yon" "$sembol" "$lot" "$emir_fiyat" "$tavan" "$taban")
+                # NOT: $() alt kabuk olusturdugu icin portfoy degisiklikleri
+                # kaybolur. Gecici dosya uzerinden sonuc yakalanir.
+                _backtest_emir_isle "$yon" "$sembol" "$lot" "$emir_fiyat" "$tavan" "$taban" > "$_sinyal_dosya"
                 local emir_durumu=$?
+                local sonuc
+                sonuc=$(<"$_sinyal_dosya")
 
                 if [[ "$emir_durumu" -eq 0 ]]; then
                     # Islem basarili — kaydet
@@ -327,6 +334,9 @@ _backtest_ana_dongu() {
             _backtest_gunluk_kaydet "$gun_no" "$tarih"
         fi
     done
+
+    # Gecici sinyal dosyasini temizle
+    rm -f "/tmp/_bt_sinyal_$$"
 }
 
 # _backtest_parametreleri_coz <argumanlar...>

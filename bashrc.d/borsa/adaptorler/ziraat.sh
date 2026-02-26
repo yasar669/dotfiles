@@ -646,13 +646,8 @@ adaptor_emirleri_listele() {
     local birlesik
     birlesik=$(echo "$liste_yaniti" | tr '\n' ' ' | sed 's/<tr /\n<tr /g')
 
-    echo ""
-    echo "=========================================================================="
-    printf " %-12s %-8s %-6s %-10s %-6s %-12s\n" \
-        "REFERANS" "HISSE" "A/S" "FIYAT" "ADET" "DURUM"
-    echo "=========================================================================="
-
     local bulunan=0
+    local satirlar=""
     _borsa_veri_sifirla_emirler
     while IFS= read -r blok; do
         # Sadece emir satirlari: data-chainno iceren <tr> bloklari
@@ -697,22 +692,15 @@ adaptor_emirleri_listele() {
         echo "$blok" | grep -q 'btnListDailyDelete' && iptal_var="[*]"
         _borsa_veri_kaydet_emir "$ext_id" "${sembol_p:-}" "${islem_p:-}" "${adet_p:-}" "${fiyat_p:-}" "$durum_p" "$iptal_var"
 
-        printf " %-12s %-8s %-6s %-10s %-6s %-12s %s\n" \
+        satirlar+=$(printf " %-12s %-8s %-6s %-10s %-6s %-12s %s\n" \
             "${ext_id:-?}" "${sembol_p:-?}" "${islem_p:-?}" \
-            "${fiyat_p:-?}" "${adet_p:-?}" "$durum_p" "$iptal_var"
+            "${fiyat_p:-?}" "${adet_p:-?}" "$durum_p" "$iptal_var")
+        satirlar+=$'\n'
         bulunan=$((bulunan + 1))
     done <<< "$birlesik"
     _BORSA_VERI_EMIRLER_ZAMAN=$(date +%s)
 
-    if [[ "$bulunan" -eq 0 ]]; then
-        echo " (Emir bulunamadi)"
-    fi
-
-    echo "=========================================================================="
-    echo " [*] = Iptal edilebilir emir"
-    echo " Iptal icin: borsa ziraat iptal <REFERANS>"
-    echo "=========================================================================="
-    echo ""
+    cekirdek_yazdir_emir_listesi "$ADAPTOR_ADI" "$satirlar" "$bulunan"
     _ziraat_log "Toplam $bulunan emir listelendi. Debug: $emir_liste_dosyasi"
     return 0
 }
