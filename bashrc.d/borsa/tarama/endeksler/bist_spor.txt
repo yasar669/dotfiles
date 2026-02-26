@@ -1,0 +1,6 @@
+# BIST Spor Endeksi (4 hisse)
+# Kaynak: KAP (kap.org.tr/tr/Endeksler)
+BJKAS
+FENER
+GSRAY
+TSPOR

@@ -27,6 +27,67 @@ fi
 # BOLUM 1: ALTYAPI FONKSIYONLARI
 # =======================================================
 
+# Otomatik baslama bayragi (oturum basina bir kere)
+_VT_KONTROL_YAPILDI=0
+
+# -------------------------------------------------------
+# _vt_otomatik_baslat
+# Supabase konteynerlerinin calisip calismadigini kontrol eder.
+# Calismiyorsa docker compose ile otomatik baslatir.
+# Shell oturumunda sadece bir kere calisir.
+# -------------------------------------------------------
+_vt_otomatik_baslat() {
+    # Zaten kontrol edildi mi?
+    [[ "$_VT_KONTROL_YAPILDI" -eq 1 ]] && return 0
+
+    _VT_KONTROL_YAPILDI=1
+
+    # Ayarlar yoksa DB kullanilmiyor demek — atla
+    if [[ -z "$_SUPABASE_URL" ]] || [[ -z "$_SUPABASE_ANAHTAR" ]]; then
+        return 0
+    fi
+
+    # Docker kurulu mu?
+    if ! command -v docker > /dev/null 2>&1; then
+        return 1
+    fi
+
+    # API zaten erisilebilir mi? (hizli kontrol, 2 saniye timeout)
+    if curl -sf --max-time 2 \
+        -H "apikey: $_SUPABASE_ANAHTAR" \
+        "${_SUPABASE_URL}/rest/v1/" > /dev/null 2>&1; then
+        return 0
+    fi
+
+    # Konteynerler durdurulmus — baslatmayi dene
+    local compose_dizin="${BORSA_KLASORU}/veritabani"
+    if [[ ! -f "${compose_dizin}/docker-compose.yml" ]]; then
+        return 1
+    fi
+
+    _cekirdek_log "Supabase konteynerleri baslatiliyor..."
+    docker compose -f "${compose_dizin}/docker-compose.yml" up -d 2>/dev/null
+
+    # PostgREST'in hazir olmasini bekle (maks 15 saniye)
+    local beklenen=0
+    while [[ "$beklenen" -lt 15 ]]; do
+        if curl -sf --max-time 2 \
+            -H "apikey: $_SUPABASE_ANAHTAR" \
+            "${_SUPABASE_URL}/rest/v1/" > /dev/null 2>&1; then
+            _cekirdek_log "Supabase hazir."
+            return 0
+        fi
+        sleep 1
+        beklenen=$((beklenen + 1))
+    done
+
+    _cekirdek_log "UYARI: Supabase baslatilamadi."
+    return 1
+}
+
+# Shell yuklendiginde otomatik kontrol et
+_vt_otomatik_baslat
+
 # -------------------------------------------------------
 # vt_baglanti_kontrol
 # Supabase erisimini test eder.
@@ -43,9 +104,9 @@ vt_baglanti_kontrol() {
         return 0
     fi
 
-    _cekirdek_log "UYARI: Supabase erisilemedi (${_SUPABASE_URL})."
-    _cekirdek_log "Baslatmak icin: cd ${BORSA_KLASORU}/veritabani && docker compose up -d"
-    return 1
+    # Erisim yok — otomatik baslatmayi dene
+    _VT_KONTROL_YAPILDI=0
+    _vt_otomatik_baslat
 }
 
 # -------------------------------------------------------
@@ -439,38 +500,8 @@ vt_oturum_log_yaz() {
     vt_istek_at "POST" "oturum_log" "$json" 2>/dev/null
 }
 
-# -------------------------------------------------------
-# vt_fiyat_kaydet <sembol> <fiyat> <tavan> <taban> <degisim>
-#                 <hacim> <seans_durumu> <kurum> <hesap>
-# Fiyat verisini kaydeder.
-# Tetik: veri_kaynagi_fiyat_al taze cekim aninda
-# -------------------------------------------------------
-vt_fiyat_kaydet() {
-    local sembol="$1"
-    local fiyat="$2"
-    local tavan="${3:-}"
-    local taban="${4:-}"
-    local degisim="${5:-}"
-    local hacim="${6:-}"
-    local seans_durumu="${7:-}"
-    local kurum="${8:-}"
-    local hesap="${9:-}"
-
-    local json
-    json=$(_vt_json_olustur \
-        "sembol" "$sembol" \
-        "fiyat" "$fiyat" \
-        "tavan" "$tavan" \
-        "taban" "$taban" \
-        "degisim" "$degisim" \
-        "hacim" "$hacim" \
-        "seans_durumu" "$seans_durumu" \
-        "kaynak_kurum" "$kurum" \
-        "kaynak_hesap" "$hesap"
-    )
-
-    vt_istek_at "POST" "fiyat_gecmisi" "$json" 2>/dev/null
-}
+# (vt_fiyat_kaydet kaldirildi — fiyat_gecmisi tablosu yerine ohlcv kullaniliyor.
+#  Anlik fiyat yazimi icin vt_ohlcv_yaz kullanilmali.)
 
 # =======================================================
 # BOLUM 3: OKUMA FONKSIYONLARI
@@ -700,39 +731,59 @@ vt_kar_zarar_rapor() {
 }
 
 # -------------------------------------------------------
-# vt_fiyat_gecmisi <sembol> [limit]
-# Belirli sembolun fiyat gecmisini getirir.
+# vt_fiyat_gecmisi <sembol> [limit] [periyot]
+# ohlcv tablosundan fiyat gecmisi gosterir.
+# Varsayilan periyot: 1G (gunluk), varsayilan limit: 30
+# Gecerli periyotlar: 1dk 3dk 5dk 15dk 30dk 45dk 1S 2S 3S 4S 1G 1H 1A
 # -------------------------------------------------------
 vt_fiyat_gecmisi() {
     local sembol="$1"
     local limit="${2:-30}"
+    local periyot="${3:-1G}"
+
+    local sorgu="ohlcv?sembol=eq.${sembol}&periyot=eq.${periyot}"
+    sorgu+="&order=tarih.desc&limit=${limit}"
+    sorgu+="&select=tarih,acilis,yuksek,dusuk,kapanis,hacim"
 
     local yanit
-    yanit=$(vt_istek_at "GET" "fiyat_gecmisi?sembol=eq.${sembol}&order=zaman.desc&limit=${limit}" "" "Prefer: return=representation")
+    yanit=$(vt_istek_at "GET" "$sorgu" "" "Prefer: return=representation")
 
-    if [[ -z "$yanit" ]]; then
-        echo "Fiyat gecmisi bulunamadi: $sembol"
+    if [[ -z "$yanit" ]] || [[ "$yanit" == "[]" ]]; then
+        echo "Fiyat gecmisi bulunamadi: $sembol (periyot: $periyot)"
         return 1
     fi
 
     echo ""
     echo "========================================================================="
-    echo "  FIYAT GECMISI — $sembol (Son $limit)"
+    echo "  FIYAT GECMISI — $sembol / $periyot (Son $limit)"
     echo "========================================================================="
-    printf " %-16s %10s %10s %10s %8s %12s\n" \
-        "Zaman" "Fiyat" "Tavan" "Taban" "Degisim" "Hacim"
+    printf " %-16s %10s %10s %10s %10s %12s\n" \
+        "Tarih" "Acilis" "Yuksek" "Dusuk" "Kapanis" "Hacim"
     echo "-------------------------------------------------------------------------"
 
     if command -v jq > /dev/null 2>&1; then
-        echo "$yanit" | jq -r '.[] | "\(.zaman)\t\(.fiyat)\t\(.tavan // "-")\t\(.taban // "-")\t\(.degisim // "-")\t\(.hacim // "-")"' 2>/dev/null | \
-        while IFS=$'\t' read -r zaman fiyat tavan taban degisim hacim; do
-            local kisa_zaman
-            kisa_zaman="${zaman:0:16}"
-            printf " %-16s %10s %10s %10s %8s %12s\n" \
-                "$kisa_zaman" "$fiyat" "$tavan" "$taban" "$degisim" "$hacim"
+        echo "$yanit" | jq -r '.[] | "\(.tarih)\t\(.acilis)\t\(.yuksek)\t\(.dusuk)\t\(.kapanis)\t\(.hacim)"' 2>/dev/null | \
+        while IFS=$'\t' read -r tarih acilis yuksek dusuk kapanis hacim; do
+            local kisa_tarih
+            kisa_tarih="${tarih:0:16}"
+            printf " %-16s %10s %10s %10s %10s %12s\n" \
+                "$kisa_tarih" "$acilis" "$yuksek" "$dusuk" "$kapanis" "$hacim"
         done
     else
-        echo "$yanit"
+        # jq yoksa basit grep/sed ile parse et
+        echo "$yanit" | grep -o '"tarih":"[^"]*"' | sed 's/"tarih":"//;s/"//' | \
+        paste - \
+            <(echo "$yanit" | grep -oP '"acilis":\K[0-9.]+') \
+            <(echo "$yanit" | grep -oP '"yuksek":\K[0-9.]+') \
+            <(echo "$yanit" | grep -oP '"dusuk":\K[0-9.]+') \
+            <(echo "$yanit" | grep -oP '"kapanis":\K[0-9.]+') \
+            <(echo "$yanit" | grep -oP '"hacim":\K[0-9.]+') | \
+        while IFS=$'\t' read -r tarih acilis yuksek dusuk kapanis hacim; do
+            local kisa_tarih
+            kisa_tarih="${tarih:0:16}"
+            printf " %-16s %10s %10s %10s %10s %12s\n" \
+                "$kisa_tarih" "$acilis" "$yuksek" "$dusuk" "$kapanis" "$hacim"
+        done
     fi
 
     echo "========================================================================="
@@ -740,33 +791,39 @@ vt_fiyat_gecmisi() {
 }
 
 # -------------------------------------------------------
-# vt_fiyat_istatistik <sembol> [gun_sayisi]
-# Belirli sembol icin istatistik.
+# vt_fiyat_istatistik <sembol> [gun_sayisi] [periyot]
+# ohlcv tablosundan belirli sembol icin istatistik hesaplar.
+# Varsayilan periyot: 1G (gunluk)
 # -------------------------------------------------------
 vt_fiyat_istatistik() {
     local sembol="$1"
     local gun="${2:-30}"
+    local periyot="${3:-1G}"
 
     local baslangic
     baslangic=$(date -d "-${gun} days" '+%Y-%m-%d' 2>/dev/null || date -v "-${gun}d" '+%Y-%m-%d' 2>/dev/null)
 
-    local yanit
-    yanit=$(vt_istek_at "GET" "fiyat_gecmisi?sembol=eq.${sembol}&zaman=gte.${baslangic}&order=zaman.desc" "" "Prefer: return=representation")
+    local sorgu="ohlcv?sembol=eq.${sembol}&periyot=eq.${periyot}"
+    sorgu+="&tarih=gte.${baslangic}&order=tarih.desc"
+    sorgu+="&select=kapanis,yuksek,dusuk,hacim"
 
-    if [[ -z "$yanit" ]] || ! command -v jq > /dev/null 2>&1; then
-        echo "Istatistik hesaplanamadi: $sembol"
+    local yanit
+    yanit=$(vt_istek_at "GET" "$sorgu" "" "Prefer: return=representation")
+
+    if [[ -z "$yanit" ]] || [[ "$yanit" == "[]" ]] || ! command -v jq > /dev/null 2>&1; then
+        echo "Istatistik hesaplanamadi: $sembol (periyot: $periyot)"
         return 1
     fi
 
     local kayit_sayisi ort_fiyat min_fiyat maks_fiyat
     kayit_sayisi=$(echo "$yanit" | jq 'length' 2>/dev/null)
-    ort_fiyat=$(echo "$yanit" | jq '[.[].fiyat | tonumber] | add / length | . * 100 | round / 100' 2>/dev/null)
-    min_fiyat=$(echo "$yanit" | jq '[.[].fiyat | tonumber] | min' 2>/dev/null)
-    maks_fiyat=$(echo "$yanit" | jq '[.[].fiyat | tonumber] | max' 2>/dev/null)
+    ort_fiyat=$(echo "$yanit" | jq '[.[].kapanis | tonumber] | add / length | . * 100 | round / 100' 2>/dev/null)
+    min_fiyat=$(echo "$yanit" | jq '[.[].dusuk | tonumber] | min' 2>/dev/null)
+    maks_fiyat=$(echo "$yanit" | jq '[.[].yuksek | tonumber] | max' 2>/dev/null)
 
     echo ""
     echo "========================================="
-    echo "  FIYAT ISTATISTIK — $sembol (Son ${gun} gun)"
+    echo "  FIYAT ISTATISTIK — $sembol / $periyot (Son ${gun} gun)"
     echo "========================================="
     echo "  Kayit Sayisi : ${kayit_sayisi:-0}"
     echo "  Ortalama     : ${ort_fiyat:-?} TL"
@@ -1098,5 +1155,174 @@ _vt_bekleyenleri_gonder() {
     else
         rm -f "$bekleyen"
         _cekirdek_log "DB: Tum bekleyen kayitlar gonderildi."
+    fi
+}
+
+# =======================================================
+# BOLUM 5: OHLCV FONKSIYONLARI
+# Mum verisinin okunmasi, yazilmasi ve toplu yuklenmesi.
+# =======================================================
+
+# -------------------------------------------------------
+# vt_ohlcv_oku <sembol> <periyot> <limit> [offset]
+# Supabase'den OHLCV mum verisi okur.
+# Sonuc en yeni mumdan eskiye dogru siralanir.
+# stdout: JSON dizisi
+# Donus: 0 = basarili, 1 = basarisiz
+# -------------------------------------------------------
+vt_ohlcv_oku() {
+    local sembol="$1"
+    local periyot="$2"
+    local limit="${3:-200}"
+    local offset="${4:-0}"
+
+    if [[ -z "$sembol" ]] || [[ -z "$periyot" ]]; then
+        return 1
+    fi
+
+    local sorgu="ohlcv?sembol=eq.${sembol}&periyot=eq.${periyot}"
+    sorgu+="&order=tarih.desc&limit=${limit}&offset=${offset}"
+    sorgu+="&select=tarih,acilis,yuksek,dusuk,kapanis,hacim,kaynak"
+
+    vt_istek_at "GET" "$sorgu"
+}
+
+# -------------------------------------------------------
+# vt_ohlcv_yaz <sembol> <periyot> <tarih> <acilis> <yuksek>
+#              <dusuk> <kapanis> <hacim> [kaynak]
+# Tek bir OHLCV mumunu Supabase'e yazar (UPSERT).
+# Ayni sembol+periyot+tarih varsa gunceller.
+# Donus: 0 = basarili, 1 = basarisiz
+# -------------------------------------------------------
+vt_ohlcv_yaz() {
+    local sembol="$1"
+    local periyot="$2"
+    local tarih="$3"
+    local acilis="$4"
+    local yuksek="$5"
+    local dusuk="$6"
+    local kapanis="$7"
+    local hacim="$8"
+    local kaynak="${9:-tvdata}"
+
+    if [[ -z "$sembol" ]] || [[ -z "$kapanis" ]]; then
+        return 1
+    fi
+
+    local json
+    json=$(_vt_json_olustur \
+        "sembol" "$sembol" \
+        "periyot" "$periyot" \
+        "tarih" "$tarih" \
+        "acilis" "$acilis" \
+        "yuksek" "$yuksek" \
+        "dusuk" "$dusuk" \
+        "kapanis" "$kapanis" \
+        "hacim" "$hacim" \
+        "kaynak" "$kaynak")
+
+    if ! vt_istek_at "POST" "ohlcv" "$json" \
+        "Prefer: resolution=merge-duplicates"; then
+        _vt_yedege_yaz "ohlcv" "$json"
+        return 1
+    fi
+
+    return 0
+}
+
+# -------------------------------------------------------
+# vt_ohlcv_toplu_yaz <json_dizi>
+# Birden fazla OHLCV mumunu tek istekte yazar (UPSERT).
+# json_dizi: JSON array formati [{"sembol":..}, {"sembol":..}]
+# Donus: 0 = basarili, 1 = basarisiz
+# -------------------------------------------------------
+vt_ohlcv_toplu_yaz() {
+    local json_dizi="$1"
+
+    if [[ -z "$json_dizi" ]]; then
+        return 1
+    fi
+
+    vt_istek_at "POST" "ohlcv" "$json_dizi" \
+        "Prefer: resolution=merge-duplicates"
+}
+
+# -------------------------------------------------------
+# vt_ohlcv_son_tarih <sembol> <periyot>
+# Belirtilen sembol ve periyot icin en son mum tarihini doner.
+# stdout: ISO tarih veya bos
+# Donus: 0 = bulundu, 1 = veri yok
+# -------------------------------------------------------
+vt_ohlcv_son_tarih() {
+    local sembol="$1"
+    local periyot="$2"
+
+    if [[ -z "$sembol" ]] || [[ -z "$periyot" ]]; then
+        return 1
+    fi
+
+    local sorgu="ohlcv?sembol=eq.${sembol}&periyot=eq.${periyot}"
+    sorgu+="&order=tarih.desc&limit=1&select=tarih"
+
+    local yanit
+    yanit=$(vt_istek_at "GET" "$sorgu") || return 1
+
+    # JSON dizisinden tarih cikart: [{"tarih":"2026-02-24T..."}]
+    local tarih=""
+    if command -v jq > /dev/null 2>&1; then
+        tarih=$(echo "$yanit" | jq -r '.[0].tarih // empty' 2>/dev/null)
+    else
+        tarih=$(echo "$yanit" | grep -oP '"tarih"\s*:\s*"\K[^"]+' | head -1)
+    fi
+
+    if [[ -n "$tarih" ]]; then
+        echo "$tarih"
+        return 0
+    fi
+
+    return 1
+}
+
+# -------------------------------------------------------
+# vt_ohlcv_sayac <sembol> [periyot]
+# Belirtilen sembol (ve istege bagli periyot) icin
+# kayitli mum sayisini doner.
+# stdout: sayi
+# -------------------------------------------------------
+vt_ohlcv_sayac() {
+    local sembol="$1"
+    local periyot="${2:-}"
+
+    local sorgu="ohlcv?sembol=eq.${sembol}"
+    if [[ -n "$periyot" ]]; then
+        sorgu+="&periyot=eq.${periyot}"
+    fi
+
+    local yanit
+    yanit=$(vt_istek_at "GET" "$sorgu" "" \
+        "Prefer: count=exact" \
+        "Range-Unit: items" \
+        "Range: 0-0") || return 1
+
+    # Supabase count header yerine bos yanit kontrolu
+    # Basit yontem: select count ile
+    local sayac_sorgu="ohlcv?sembol=eq.${sembol}&select=id"
+    if [[ -n "$periyot" ]]; then
+        sayac_sorgu+="&periyot=eq.${periyot}"
+    fi
+    sayac_sorgu+="&limit=0"
+
+    # Prefer: count=exact header'i Content-Range doner
+    yanit=$(curl -s \
+        -H "apikey: $_SUPABASE_ANAHTAR" \
+        -H "Authorization: Bearer $_SUPABASE_ANAHTAR" \
+        -H "Prefer: count=exact" \
+        "${_SUPABASE_URL}/rest/v1/${sayac_sorgu}" 2>/dev/null \
+        -D /dev/stderr 2>&1 | grep -oP 'Content-Range: \K[0-9/*]+' | head -1)
+
+    if [[ "$yanit" == *"/"* ]]; then
+        echo "${yanit##*/}"
+    else
+        echo "0"
     fi
 }

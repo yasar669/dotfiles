@@ -1,0 +1,8 @@
+# BIST Sigorta Endeksi (6 hisse)
+# Kaynak: KAP (kap.org.tr/tr/Endeksler)
+AGESA
+AKGRT
+ANHYT
+ANSGR
+RAYSG
+TURSG

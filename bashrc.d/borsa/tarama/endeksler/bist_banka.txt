@@ -1,0 +1,14 @@
+# BIST Banka Endeksi
+# Kaynak: KAP (kap.org.tr/tr/Endeksler)
+AKBNK
+ALBRK
+GARAN
+HALKB
+ICBCT
+ISATR
+ISBTR
+ISCTR
+SKBNK
+TSKB
+VAKBN
+YKBNK

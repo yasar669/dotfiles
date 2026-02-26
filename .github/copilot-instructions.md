@@ -31,3 +31,7 @@ Plan MD Şablonu:
 - Kod blokları sadece örnek komut veya örnek çıktı göstermek için kullanılacak.
 - Her başlık altında en az bir satır açıklama bulunacak, boş başlık olmayacak.
 - Yol haritası aşamaları numaralandırılacak ve her aşamanın kısa bir başlığı olacak.
+
+Kural 6 = bashrc.d/ klasörü altındaki herhangi bir shell dosyasında (.sh) değişiklik yapıldıktan sonra, değişikliklerin terminale yansıması için `source ~/.bashrc` komutu otomatik olarak çalıştırılacak. Kullanıcıdan bunu manuel yapması beklenmeyecek. Değişiklik yapan araç çağrısından hemen sonra bu komut SafeToAutoRun=true ile çalıştırılacak.
+
+Kural 7 = bashrc.d/borsa/adaptorler/ klasöründe herhangi bir değişiklik yapılmadan önce (yeni adaptör ekleme, mevcut adaptör düzenleme, ayarlar dosyası güncelleme) `bashrc.d/borsa/adaptorler/plan.md` dosyası okunacak. Bu dosya adaptör katmanının mimari ilkelerini, sorumluluk ayrımını (adaptöre ait olan / çekirdeğe ait olan), zorunlu arabirim sözleşmesini (`adaptor_*` fonksiyonları), dosya yapısını, isimlendirme konvansiyonlarını ve yeni adaptör ekleme kontrol listesini içerir. Plan dosyası okunmadan adaptör klasöründe hiçbir dosya oluşturulmayacak veya düzenlenmeyecek.

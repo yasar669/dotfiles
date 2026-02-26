@@ -181,3 +181,23 @@ _ZIRAAT_IPO_SEL_TALEP_SATIR='<tr[^>]*id="[^"]*"[^>]*>'
 # M = Miktar bazli (lot), T = Tutar bazli (TL)
 _ZIRAAT_IPO_TALEP_MIKTAR="M"
 _ZIRAAT_IPO_TALEP_TUTAR="T"
+
+# =======================================================
+# BOLUM 6: WSS (WebSocket SignalR) AYARLARI
+# =======================================================
+
+# SignalR veri sunucusu (esube1'den farkli!)
+_ZIRAAT_WSS_SUNUCU="veri.ziraatyatirim.com.tr"
+_ZIRAAT_WSS_YOL="/websocket/signalr"
+_ZIRAAT_WSS_BASE="https://${_ZIRAAT_WSS_SUNUCU}${_ZIRAAT_WSS_YOL}"
+
+# AddOrder sayfasindan sembol -> FinInstId esleme cikarma kalibi
+# JSON: { "Text": "THYAO", "Value": "0000-000IKY-FIN" }
+_ZIRAAT_WSS_SEL_ESLEME='"Text"\s*:\s*"([A-Z0-9]+)"\s*,\s*"Value"\s*:\s*"(0000-[0-9A-Z]+-FIN)"'
+
+# WSS dosya yollari
+_ZIRAAT_WSS_DIZIN="/tmp/borsa/_wss"
+_ZIRAAT_WSS_ESLEME_DOSYASI="/tmp/borsa/_sembol_fininstid.json"
+
+# WSS daemon script konumu (tarama/ dizininde)
+_ZIRAAT_WSS_DAEMON_SCRIPT="${_BORSA_TARAMA_DIZIN:-$HOME/dotfiles/bashrc.d/borsa/tarama}/_wss_daemon.py"

@@ -150,10 +150,8 @@ _ziraat_sms_dogrula() {
     local musteri_no="$2"
     local parola="$3"
 
-    echo "========================================"
-    echo "DIKKAT: Banka SMS Dogrulama Kodu Istiyor"
-    echo "========================================"
-    echo "Lutfen telefonunuza gelen kodu girin:"
+    cekirdek_yazdir_oturum_bilgi "DIKKAT: Banka SMS Dogrulama Kodu Istiyor" \
+        "Bilgi" "Lutfen telefonunuza gelen kodu girin:"
     read -r sms_kodu
 
     if [[ -z "$sms_kodu" ]]; then
@@ -203,8 +201,10 @@ _ziraat_sms_dogrula() {
         local redirect_url
         redirect_url=$(echo "$sms_sonuc" | grep -oP '"url":"\K[^"]+')
         _ziraat_log "Yonlendirilecek URL: $redirect_url"
-        # JSON basarida da oturum suresini kaydet
-        cekirdek_oturum_suresi_kaydet "ziraat" "$musteri_no" "1500"
+        # JSON basarida da oturum suresini parse et ve kaydet
+        local _oturum_suresi_json
+        _oturum_suresi_json=$(adaptor_oturum_suresi_parse "$sms_sonuc")
+        cekirdek_oturum_suresi_kaydet "ziraat" "$musteri_no" "$_oturum_suresi_json"
         cekirdek_son_istek_guncelle "ziraat" "$musteri_no"
     else
         _ziraat_log "HATA: SMS dogrulamasi basarisiz."
@@ -338,9 +338,37 @@ adaptor_giris() {
     elif echo "$_ziraat_giris_sonuc" | grep -q "$_ZIRAAT_KALIP_SMS"; then
         _ziraat_log "SMS dogrulama ekrani tespit edildi."
         _ziraat_sms_dogrula "$token_val" "$musteri_no" "$parola"
-    else
-        _ziraat_log "Giris tamamlandi (veya bilinmeyen sayfa)."
+    elif echo "$_ziraat_giris_sonuc" | grep -qP "$_ZIRAAT_KALIP_BASARILI_HTML"; then
+        # Sunucu SMS istemeden dogrudan giris verdi (guvenilen cihaz/oturum)
+        _ziraat_log "BASARILI: Giris tamamlandi (SMS istenmedi, dogrudan basarili)."
+        local _oturum_suresi
+        _oturum_suresi=$(adaptor_oturum_suresi_parse "$_ziraat_giris_sonuc")
+        cekirdek_oturum_suresi_kaydet "ziraat" "$musteri_no" "$_oturum_suresi"
+        cekirdek_son_istek_guncelle "ziraat" "$musteri_no"
         cekirdek_yazdir_giris_basarili "$ADAPTOR_ADI"
+    elif echo "$_ziraat_giris_sonuc" | grep -q "$_ZIRAAT_KALIP_BASARILI_JSON"; then
+        # JSON basari yaniti (redirect ile)
+        _ziraat_log "BASARILI: Giris tamamlandi (JSON, SMS istenmedi)."
+        local _oturum_suresi
+        _oturum_suresi=$(adaptor_oturum_suresi_parse "$_ziraat_giris_sonuc")
+        cekirdek_oturum_suresi_kaydet "ziraat" "$musteri_no" "$_oturum_suresi"
+        cekirdek_son_istek_guncelle "ziraat" "$musteri_no"
+        cekirdek_yazdir_giris_basarili "$ADAPTOR_ADI"
+    else
+        # Taninamayan yanit — kesinlikle basarili degil
+        _ziraat_log "UYARI: Giris yaniti taninamadi. Ne SMS, ne hata, ne basarili sayfa."
+        local debug_dosyasi
+        debug_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_DEBUG")
+        echo "$_ziraat_giris_sonuc" > "$debug_dosyasi"
+        _ziraat_log "Yanit boyutu: ${#_ziraat_giris_sonuc} bayt. Debug: $debug_dosyasi"
+        echo "UYARI: Giris durumu belirsiz. Sunucu yaniti taninamadi."
+        echo "  Olasi nedenler:"
+        echo "    - Ziraat ayni anda tek oturum izni veriyor olabilir"
+        echo "    - Ayni telefondan kisa surede birden fazla SMS istendi"
+        echo "    - Site yapisi degismis olabilir"
+        echo "  Detay icin: cat $debug_dosyasi"
+        cekirdek_aktif_hesap_ayarla "ziraat" ""
+        return 1
     fi
 }
 
@@ -1883,38 +1911,44 @@ adaptor_halka_arz_guncelle() {
 
 # -------------------------------------------------------
 # adaptor_oturum_suresi_parse <html_icerigi>
-# Giris yaniti HTML'indeki sessionTimeOutModel degerini
-# parse ederek saniye cinsinden dondurur.
+# Giris yaniti HTML'indeki sessionTimeOutModel JSON
+# objesinden SessionEndTime degerini parse ederek
+# saniye cinsinden dondurur.
 # Ziraat sunucusu oturum suresini JavaScript icerisinde
-# milisaniye olarak verir.
+# milisaniye olarak verir:
+#   sessionTimeOutModel = $.parseJSON('{"SessionEndTime":7200000,...}')
 # stdout: sure (saniye)
 # -------------------------------------------------------
 adaptor_oturum_suresi_parse() {
     local html="$1"
 
-    # sessionTimeOutModel: {SessionTimeOut: 1500000} seklinde (ms)
+    # sessionTimeOutModel JSON'undaki SessionEndTime (ms)
     local ms
-    ms=$(echo "$html" | grep -oP 'SessionTimeOut\s*:\s*\K[0-9]+' | head -1)
+    ms=$(echo "$html" | grep -oP '"SessionEndTime"\s*:\s*\K[0-9]+(\.[0-9]+)?' | head -1)
+
+    # Ondalik kismi at (7200000.000000 -> 7200000)
+    ms="${ms%%.*}"
 
     if [[ -n "$ms" ]] && [[ "$ms" -gt 0 ]]; then
-        local saniye=$(( ms / 1000 ))
+        local saniye
+        saniye=$(( ms / 1000 ))
         echo "$saniye"
         return 0
     fi
 
-    # Bulunamazsa varsayilan: 25 dakika
-    echo "1500"
+    # Bulunamazsa varsayilan: 2 saat (site genelde 7200000ms doner)
+    echo "7200"
     return 0
 }
 
 # -------------------------------------------------------
-# adaptor_oturum_uzat [hesap_no]
+# adaptor_oturum_uzat <kurum> <hesap_no>
 # Oturumu uzatmak icin sessiz bir GET istegi atar.
 # Basari durumunda oturum zamanlayicisi sifirlanir.
 # Donus: 0 = basarili, 1 = basarisiz
 # -------------------------------------------------------
 adaptor_oturum_uzat() {
-    local hesap="${1:-$(cekirdek_aktif_hesap "ziraat")}"
+    local hesap="${2:-$(cekirdek_aktif_hesap "ziraat")}"
     local cookie_dosyasi
     cookie_dosyasi=$(cekirdek_dosya_yolu "ziraat" "$_CEKIRDEK_DOSYA_COOKIE" "$hesap")
 
@@ -2030,3 +2064,423 @@ adaptor_hisse_bilgi_al() {
 # jenerik implementasyonlari kullanilir.
 # Oturum gecerlilik kontrolu icin adaptor_oturum_gecerli_mi()
 # callback'i BOLUM 1'de tanimlidir.
+
+# =======================================================
+# BOLUM 5: WSS (WebSocket SignalR) ADAPTOR FONKSIYONLARI
+# =======================================================
+# SignalR WebSocket uzerinden canli fiyat verisi.
+# Veri sunucusu: veri.ziraatyatirim.com.tr
+# Protokol: ASP.NET SignalR v2.3 (clientProtocol=1.5)
+# Hub'lar: tsChangeManager (canli), mdmChangesHub (geciken)
+#
+# Dosyalar:
+#   PID:       /tmp/borsa/_wss/ziraat_<hesap>.pid
+#   Durum:     /tmp/borsa/_wss/ziraat_<hesap>.durum (JSON)
+#   Log:       /tmp/borsa/_wss/ziraat_<hesap>.log
+#   Semboller: /tmp/borsa/_wss/ziraat_<hesap>.semboller
+#   Tickler:   /tmp/borsa/_wss/tickler/<SEMBOL>.tick
+# =======================================================
+
+# -------------------------------------------------------
+# adaptor_wss_destekliyor_mu
+# Ziraat WSS destekliyor: 0 (evet)
+# -------------------------------------------------------
+adaptor_wss_destekliyor_mu() {
+    return 0
+}
+
+# -------------------------------------------------------
+# _ziraat_wss_hesap (dahili)
+# Aktif hesap numarasini doner.
+# -------------------------------------------------------
+_ziraat_wss_hesap() {
+    cekirdek_aktif_hesap 2>/dev/null || echo ""
+}
+
+# -------------------------------------------------------
+# _ziraat_wss_pid_dosyasi (dahili)
+# WSS PID dosya yolunu doner.
+# -------------------------------------------------------
+_ziraat_wss_pid_dosyasi() {
+    local hesap
+    hesap=$(_ziraat_wss_hesap)
+    echo "${_ZIRAAT_WSS_DIZIN}/ziraat_${hesap}.pid"
+}
+
+# -------------------------------------------------------
+# _ziraat_wss_aktif_mi (dahili)
+# WSS daemon'un calisip calismadigini kontrol eder.
+# -------------------------------------------------------
+_ziraat_wss_aktif_mi() {
+    local pid_dosya
+    pid_dosya=$(_ziraat_wss_pid_dosyasi)
+    if [[ -f "$pid_dosya" ]]; then
+        local pid
+        pid=$(cat "$pid_dosya" 2>/dev/null)
+        [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+# -------------------------------------------------------
+# _ziraat_wss_esleme_guncelle (dahili)
+# AddOrder sayfasindan sembol->FinInstId esleme tablosunu
+# cikarir ve JSON dosyasina kaydeder.
+# Otomatik olarak wss_baglan icinde cagrilir.
+# -------------------------------------------------------
+_ziraat_wss_esleme_guncelle() {
+    local esleme_dosyasi="$_ZIRAAT_WSS_ESLEME_DOSYASI"
+
+    # Esleme dosyasi varsa ve 24 saatten yeni ise atla
+    if [[ -f "$esleme_dosyasi" ]]; then
+        local dosya_yasi
+        dosya_yasi=$(( $(date +%s) - $(stat -c %Y "$esleme_dosyasi" 2>/dev/null || echo 0) ))
+        if [[ "$dosya_yasi" -lt 86400 ]]; then
+            return 0
+        fi
+    fi
+
+    _cekirdek_log "WSS esleme tablosu guncelleniyor..."
+
+    local hesap
+    hesap=$(_ziraat_wss_hesap)
+    if [[ -z "$hesap" ]]; then
+        echo "HATA: Aktif hesap bulunamadi"
+        return 1
+    fi
+
+    local cookie_dosyasi
+    cookie_dosyasi=$(_ziraat_dosya_yolu "$_CEKIRDEK_DOSYA_COOKIE")
+    if [[ ! -f "$cookie_dosyasi" ]]; then
+        echo "HATA: Oturum bulunamadi"
+        return 1
+    fi
+
+    # AddOrder sayfasini indir (1.5MB, tum sembol listesini icerir)
+    local sayfa
+    sayfa=$(cekirdek_istek_at \
+        -c "$cookie_dosyasi" \
+        -b "$cookie_dosyasi" \
+        -H "User-Agent: ${USER_AGENT:-Mozilla/5.0}" \
+        "$_ZIRAAT_EMIR_URL" 2>/dev/null)
+
+    if [[ -z "$sayfa" ]] || [[ ${#sayfa} -lt 10000 ]]; then
+        echo "HATA: AddOrder sayfasi alinamadi"
+        return 1
+    fi
+
+    # Python ile esleme cikar
+    local python_yol
+    python_yol="${_BORSA_PYTHON:-/home/yasar/dotfiles/.venv/bin/python3}"
+
+    local sonuc
+    sonuc=$("$python_yol" -c "
+import re, json, sys
+
+html = sys.stdin.read()
+esleme = {}
+for m in re.finditer(r'\"Text\"\s*:\s*\"([A-Z0-9]+)\"\s*,\s*\"Value\"\s*:\s*\"(0000-[0-9A-Z]+-FIN)\"', html):
+    esleme[m.group(1)] = m.group(2)
+
+if not esleme:
+    sys.exit(1)
+
+with open('${esleme_dosyasi}', 'w') as f:
+    json.dump(esleme, f, indent=2)
+print(len(esleme))
+" <<< "$sayfa" 2>/dev/null)
+
+    if [[ -n "$sonuc" ]] && [[ "$sonuc" -gt 0 ]] 2>/dev/null; then
+        _cekirdek_log "WSS esleme tablosu guncellendi: $sonuc sembol"
+        return 0
+    else
+        echo "HATA: Esleme tablosu cikarilamamdi"
+        return 1
+    fi
+}
+
+# -------------------------------------------------------
+# _ziraat_wss_daemon_yolu (dahili)
+# Daemon script yolunu doner.
+# -------------------------------------------------------
+_ziraat_wss_daemon_yolu() {
+    # Once ayarlardaki konumu dene
+    local yol="$_ZIRAAT_WSS_DAEMON_SCRIPT"
+    if [[ -f "$yol" ]]; then
+        echo "$yol"
+        return 0
+    fi
+
+    # Tarama dizininde ara
+    local tarama_dizin
+    tarama_dizin="$(cd "$(dirname "${BASH_SOURCE[0]}")/../tarama" 2>/dev/null && pwd)"
+    yol="${tarama_dizin}/_wss_daemon.py"
+    if [[ -f "$yol" ]]; then
+        echo "$yol"
+        return 0
+    fi
+
+    echo ""
+    return 1
+}
+
+# -------------------------------------------------------
+# adaptor_wss_baglan <sembol1> [sembol2] ...
+# Verilen sembollere WSS baglantisi acar.
+# Arka planda Python daemon baslatir.
+# -------------------------------------------------------
+adaptor_wss_baglan() {
+    if _ziraat_wss_aktif_mi; then
+        echo "WSS zaten aktif"
+        adaptor_wss_durum
+        return 0
+    fi
+
+    local hesap
+    hesap=$(_ziraat_wss_hesap)
+    if [[ -z "$hesap" ]]; then
+        echo "HATA: Aktif hesap bulunamadi. Once giris yapin."
+        return 1
+    fi
+
+    # Oturum gecerliligi kontrol
+    _ziraat_aktif_hesap_kontrol || return 1
+
+    # Esleme tablosunu guncelle (gerekirse)
+    _ziraat_wss_esleme_guncelle || return 1
+
+    # Sembol listesini dosyaya yaz
+    local sembol_dosyasi="${_ZIRAAT_WSS_DIZIN}/ziraat_${hesap}.semboller"
+    mkdir -p "$_ZIRAAT_WSS_DIZIN" 2>/dev/null
+
+    if [[ "$#" -gt 0 ]]; then
+        # Argumandan gelen semboller
+        printf '%s\n' "$@" > "$sembol_dosyasi"
+    else
+        # Takip listesindeki semboller
+        local semboller
+        semboller=$(_takip_semboller 2>/dev/null)
+        if [[ -z "$semboller" ]]; then
+            echo "HATA: Sembol belirtilmedi ve takip listesi bos"
+            return 1
+        fi
+        echo "$semboller" > "$sembol_dosyasi"
+    fi
+
+    local sembol_sayisi
+    sembol_sayisi=$(wc -l < "$sembol_dosyasi")
+
+    # Daemon script yolunu bul
+    local daemon_yolu
+    daemon_yolu=$(_ziraat_wss_daemon_yolu)
+    if [[ -z "$daemon_yolu" ]]; then
+        echo "HATA: WSS daemon scripti bulunamadi"
+        return 1
+    fi
+
+    # Tick dizinini hazirla
+    mkdir -p "/tmp/borsa/_wss/tickler" 2>/dev/null
+
+    # Python daemon'u arka planda baslat
+    local python_yol
+    python_yol="${_BORSA_PYTHON:-/home/yasar/dotfiles/.venv/bin/python3}"
+
+    "$python_yol" "$daemon_yolu" "$hesap" &
+    disown
+
+    # Daemon'un baslamasini bekle
+    local bekle=0
+    while [[ "$bekle" -lt 5 ]]; do
+        sleep 1
+        if _ziraat_wss_aktif_mi; then
+            echo "WSS baglantisi kuruldu"
+            echo "  Hesap: $hesap"
+            echo "  Sembol: $sembol_sayisi adet"
+            echo "  Mod: SignalR WebSocket"
+            echo "  Sunucu: $_ZIRAAT_WSS_SUNUCU"
+            return 0
+        fi
+        bekle=$((bekle + 1))
+    done
+
+    echo "UYARI: WSS daemon basladi ama henuz baglanmamis olabilir"
+    echo "Durum icin: adaptor_wss_durum"
+    return 0
+}
+
+# -------------------------------------------------------
+# adaptor_wss_sembol_ekle <sembol>
+# Aktif WSS baglantisina yeni sembol ekler.
+# -------------------------------------------------------
+adaptor_wss_sembol_ekle() {
+    local sembol="${1^^}"
+    if [[ -z "$sembol" ]]; then
+        echo "HATA: Sembol belirtilmedi"
+        return 1
+    fi
+
+    if ! _ziraat_wss_aktif_mi; then
+        echo "HATA: WSS baglantisi aktif degil"
+        return 1
+    fi
+
+    local hesap
+    hesap=$(_ziraat_wss_hesap)
+    local sembol_dosyasi="${_ZIRAAT_WSS_DIZIN}/ziraat_${hesap}.semboller"
+
+    # Zaten var mi kontrol
+    if grep -qx "$sembol" "$sembol_dosyasi" 2>/dev/null; then
+        echo "'$sembol' zaten WSS listesinde"
+        return 0
+    fi
+
+    # Sembol dosyasina ekle
+    echo "$sembol" >> "$sembol_dosyasi"
+
+    # Daemon'a SIGUSR1 gonder — sembol listesini yeniden oku
+    local pid
+    pid=$(cat "$(_ziraat_wss_pid_dosyasi)" 2>/dev/null)
+    if [[ -n "$pid" ]]; then
+        kill -USR1 "$pid" 2>/dev/null
+        echo "'$sembol' WSS listesine eklendi"
+    fi
+    return 0
+}
+
+# -------------------------------------------------------
+# adaptor_wss_sembol_cikar <sembol>
+# Aktif WSS baglantisinden sembol cikarir.
+# -------------------------------------------------------
+adaptor_wss_sembol_cikar() {
+    local sembol="${1^^}"
+    if [[ -z "$sembol" ]]; then
+        echo "HATA: Sembol belirtilmedi"
+        return 1
+    fi
+
+    if ! _ziraat_wss_aktif_mi; then
+        echo "HATA: WSS baglantisi aktif degil"
+        return 1
+    fi
+
+    local hesap
+    hesap=$(_ziraat_wss_hesap)
+    local sembol_dosyasi="${_ZIRAAT_WSS_DIZIN}/ziraat_${hesap}.semboller"
+
+    if ! grep -qx "$sembol" "$sembol_dosyasi" 2>/dev/null; then
+        echo "'$sembol' WSS listesinde degil"
+        return 0
+    fi
+
+    # Sembol dosyasindan cikar
+    local gecici
+    gecici=$(mktemp)
+    grep -vx "$sembol" "$sembol_dosyasi" > "$gecici"
+    mv "$gecici" "$sembol_dosyasi"
+
+    # Daemon'a SIGUSR1 gonder
+    local pid
+    pid=$(cat "$(_ziraat_wss_pid_dosyasi)" 2>/dev/null)
+    if [[ -n "$pid" ]]; then
+        kill -USR1 "$pid" 2>/dev/null
+        echo "'$sembol' WSS listesinden cikarildi"
+    fi
+    return 0
+}
+
+# -------------------------------------------------------
+# adaptor_wss_kapat
+# WSS baglantisini kapatir.
+# -------------------------------------------------------
+adaptor_wss_kapat() {
+    if ! _ziraat_wss_aktif_mi; then
+        echo "WSS baglantisi zaten kapali"
+        return 0
+    fi
+
+    local pid
+    pid=$(cat "$(_ziraat_wss_pid_dosyasi)" 2>/dev/null)
+    if [[ -n "$pid" ]]; then
+        kill "$pid" 2>/dev/null
+        # Kapanmasini bekle
+        local bekle=0
+        while kill -0 "$pid" 2>/dev/null && [[ "$bekle" -lt 5 ]]; do
+            sleep 1
+            bekle=$((bekle + 1))
+        done
+        # Hala yasiyorsa SIGKILL
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null
+        fi
+    fi
+
+    # PID dosyasini temizle
+    rm -f "$(_ziraat_wss_pid_dosyasi)" 2>/dev/null
+
+    echo "WSS baglantisi kapatildi"
+    return 0
+}
+
+# -------------------------------------------------------
+# adaptor_wss_durum
+# WSS baglanti durumunu gosterir.
+# -------------------------------------------------------
+adaptor_wss_durum() {
+    local hesap
+    hesap=$(_ziraat_wss_hesap)
+    if [[ -z "$hesap" ]]; then
+        echo "HATA: Aktif hesap bulunamadi"
+        return 1
+    fi
+
+    echo "=== Ziraat WSS Durumu ==="
+
+    if _ziraat_wss_aktif_mi; then
+        local pid
+        pid=$(cat "$(_ziraat_wss_pid_dosyasi)" 2>/dev/null)
+        echo "Baglanti: AKTIF (PID: $pid)"
+    else
+        echo "Baglanti: KAPALI"
+    fi
+
+    # Durum dosyasini oku (jq yoksa grep ile)
+    local durum_dosyasi="${_ZIRAAT_WSS_DIZIN}/ziraat_${hesap}.durum"
+    if [[ -f "$durum_dosyasi" ]]; then
+        echo ""
+        local durum sembol_sayisi mesaj_sayisi guncelleme
+        durum=$(grep -oP '"durum"\s*:\s*"\K[^"]+' "$durum_dosyasi" | head -1)
+        sembol_sayisi=$(grep -oP '"sembol_sayisi"\s*:\s*\K[0-9]+' "$durum_dosyasi" | head -1)
+        mesaj_sayisi=$(grep -oP '"mesaj_sayaci"\s*:\s*\K[0-9]+' "$durum_dosyasi" | head -1)
+        guncelleme=$(grep -oP '"guncelleme"\s*:\s*"\K[^"]+' "$durum_dosyasi" | head -1)
+
+        [[ -n "$durum" ]] && echo "Durum: $durum"
+        [[ -n "$sembol_sayisi" ]] && echo "Sembol sayisi: $sembol_sayisi"
+        [[ -n "$mesaj_sayisi" ]] && echo "Islenen mesaj: $mesaj_sayisi"
+        [[ -n "$guncelleme" ]] && echo "Son guncelleme: $guncelleme"
+    fi
+
+    # Sembol listesi
+    local sembol_dosyasi="${_ZIRAAT_WSS_DIZIN}/ziraat_${hesap}.semboller"
+    if [[ -f "$sembol_dosyasi" ]]; then
+        local liste
+        liste=$(cat "$sembol_dosyasi" 2>/dev/null)
+        if [[ -n "$liste" ]]; then
+            echo ""
+            echo "Semboller:"
+            echo "$liste" | sed 's/^/  /'
+        fi
+    fi
+
+    # Son tick dosyasi istatistikleri
+    local tick_dizin="/tmp/borsa/_wss/tickler"
+    if [[ -d "$tick_dizin" ]]; then
+        local aktif_tick
+        aktif_tick=$(find "$tick_dizin" -name "*.tick" -mmin -1 2>/dev/null | wc -l)
+        if [[ "$aktif_tick" -gt 0 ]]; then
+            echo ""
+            echo "Son 1dk aktif tick: $aktif_tick dosya"
+        fi
+    fi
+
+    return 0
+}

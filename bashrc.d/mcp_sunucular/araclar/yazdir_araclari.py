@@ -47,10 +47,15 @@ def yazdir_araclarini_kaydet(sunucu: FastMCP) -> None:
 
         Args:
             dosya_yolu: Yazdirilacak dosyanin tam yolu (ornek: "/home/yasar/kitap.pdf").
-            sayfa_araligi: Yazdirilacak sayfa araligi. Ornekler:
+            sayfa_araligi: Yazdirilacak aralik. Dosya turune gore degisir:
+                PDF dosyalari icin (sayfa araligi):
                 - "1-20": Sayfa 1'den 20'ye
                 - "5,7,12-15": Sayfa 5, 7 ve 12-15
-                - "tumu": Tum sayfalar (Markdown icin)
+                Markdown dosyalari icin (varsayilan: satir araligi):
+                - "tumu": Tum dosyayi yazdir
+                - "10-85": Satir 10'dan 85'e kadar (varsayilan davranis)
+                - "satir:10-85": Satir 10'dan 85'e kadar (acik belirtme)
+                - "sayfa:1-3": PDF'e cevrildikten sonra sayfa araligi
             renkli: True ise renkli, False ise siyah-beyaz (varsayilan) baski.
 
         Returns:

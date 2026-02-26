@@ -1,0 +1,28 @@
+# BIST Temettu 25 Endeksi
+# Kaynak: KAP (kap.org.tr/tr/Endeksler)
+# Not: Bilesenler yilda 4 kez degisir.
+AGHOL
+AKBNK
+AKSA
+ALARK
+ANHYT
+ASTOR
+BIMAS
+BRYAT
+CCOLA
+DOAS
+DOHOL
+ENKAI
+FROTO
+GARAN
+ISCTR
+ISMEN
+KCHOL
+MAVI
+MGROS
+SISE
+TCELL
+TOASO
+TTRAK
+TUPRS
+TURSG

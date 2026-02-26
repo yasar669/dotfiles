@@ -220,6 +220,138 @@ def borsa_araclarini_kaydet(sunucu: FastMCP) -> None:
         )
 
     @sunucu.tool()
+    def borsa_fiyat(kurum: str, sembol: str) -> str:
+        """Belirtilen hisse senedinin guncel fiyat bilgisini sorgular.
+
+        Once terminalde giris yapilmis olmasi gerekir.
+
+        Args:
+            kurum: Araci kurum adi (ornek: "ziraat").
+            sembol: Hisse senedi sembolu (ornek: "THYAO", "AKBNK").
+
+        Returns:
+            Guncel fiyat bilgisi.
+        """
+        return bash_calistir(
+            f'borsa "{kurum}" fiyat "{sembol}"',
+            zaman_asimi=60,
+        )
+
+    @sunucu.tool()
+    def borsa_cikis(kurum: str, hesap_no: str) -> str:
+        """Belirtilen araci kurumdaki oturumu kapatir.
+
+        Oturum korumayi da otomatik olarak durdurur.
+
+        Args:
+            kurum: Araci kurum adi (ornek: "ziraat").
+            hesap_no: Kapatilacak hesabin numarasi.
+
+        Returns:
+            Cikis sonucu.
+        """
+        return bash_calistir(
+            f'borsa "{kurum}" cikis "{hesap_no}"',
+            zaman_asimi=30,
+        )
+
+    @sunucu.tool()
+    def borsa_oturum_durdur(kurum: str, hesap_no: str) -> str:
+        """Belirtilen hesabin oturum koruma dongusunu durdurur.
+
+        Oturum acik kalir ama periyodik yenileme durur.
+
+        Args:
+            kurum: Araci kurum adi (ornek: "ziraat").
+            hesap_no: Hesap numarasi.
+
+        Returns:
+            Durdurma sonucu.
+        """
+        return bash_calistir(
+            f'borsa "{kurum}" oturum-durdur "{hesap_no}"',
+            zaman_asimi=15,
+        )
+
+    @sunucu.tool()
+    def borsa_halka_arz_guncelle(
+        kurum: str,
+        talep_id: str,
+        yeni_lot: str,
+    ) -> str:
+        """Daha once yapilmis halka arz talebinin lot miktarini gunceller.
+
+        DIKKAT: Bu islem finansal bir baglayicilik olusturur.
+        Kullanicidan teyit alinmadan cagirilmamalidir.
+
+        Args:
+            kurum: Araci kurum adi (ornek: "ziraat").
+            talep_id: Guncellenecek talebin ID'si.
+            yeni_lot: Yeni lot miktari.
+
+        Returns:
+            Guncelleme sonucu.
+        """
+        return bash_calistir(
+            f'borsa "{kurum}" arz guncelle "{talep_id}" "{yeni_lot}"',
+            zaman_asimi=60,
+        )
+
+    @sunucu.tool()
+    def borsa_tum_bakiyeler() -> str:
+        """Tum acik oturumlardaki hesaplarin bakiyelerini tek tabloda gosterir.
+
+        Birden fazla araci kurumda hesabi olan kullanicilar icin
+        birlesik bakiye tablosu sunar.
+
+        Returns:
+            Tum hesaplarin nakit, hisse ve toplam varlik tablosu.
+        """
+        return bash_calistir("tum_bakiyeler", zaman_asimi=120)
+
+    @sunucu.tool()
+    def borsa_tum_portfoyler() -> str:
+        """Tum acik oturumlardaki portfoyleri birlesik tablo olarak gosterir.
+
+        Returns:
+            Tum hesaplarin hisse bazinda portfoy detaylari.
+        """
+        return bash_calistir("tum_portfoyler", zaman_asimi=120)
+
+    @sunucu.tool()
+    def borsa_tum_emirler() -> str:
+        """Tum acik oturumlardaki bekleyen emirleri tek tabloda gosterir.
+
+        Returns:
+            Tum hesaplardaki acik emir listesi.
+        """
+        return bash_calistir("tum_emirler", zaman_asimi=120)
+
+    @sunucu.tool()
+    def borsa_tum_oturumlar() -> str:
+        """Tum araci kurumlardaki oturum durumlarini gosterir.
+
+        Her hesap icin kalan sure, oturum koruma durumu ve
+        aktif robot bilgisi gosterilir.
+
+        Returns:
+            Oturum durum tablosu.
+        """
+        return bash_calistir("tum_oturumlar", zaman_asimi=60)
+
+    @sunucu.tool()
+    def borsa_gunluk_ozet() -> str:
+        """Tum oturumlar, bakiyeler ve gun sonu raporunu tek ekranda gosterir.
+
+        En kapsamli ozet fonksiyonudur. Birden fazla hesabin
+        genel durumunu tek seferde gormeye yarar.
+
+        Returns:
+            Oturumlar + bakiyeler + gun sonu raporu.
+        """
+        return bash_calistir("gunluk_ozet", zaman_asimi=120)
+
+    @sunucu.tool()
     def borsa_kurallar(alt_komut: str = "") -> str:
         """BIST kurallari hakkinda bilgi verir (seans, fiyat, pazar, takas).
 

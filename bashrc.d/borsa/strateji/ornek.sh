@@ -8,11 +8,13 @@
 # - Fiyat tabana yakinsa (taban + %2) ALIS sinyali verir
 # - Fiyat tavana yakinsa (tavan - %2) SATIS sinyali verir
 # - Aradaysa BEKLE
-
-# =======================================================
-# ZORUNLU: Stratejinin izleyecegi sembol listesi
-# =======================================================
-STRATEJI_SEMBOLLER=("THYAO" "AKBNK" "GARAN")
+#
+# Sembol listesi bu dosyada TANIMLANMAZ.
+# Robot baslatilirken dis kaynaktan verilir:
+#   robot_baslat --liste bist30 ziraat 123 ornek.sh
+#   robot_baslat --semboller THYAO,AKBNK ziraat 123 ornek.sh
+#   robot_baslat --portfoy ziraat 123 ornek.sh
+#   robot_baslat --dosya ~/hisselerim.txt ziraat 123 ornek.sh
 
 # =======================================================
 # YAPILANDIRMA

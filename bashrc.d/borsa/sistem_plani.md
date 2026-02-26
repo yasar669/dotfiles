@@ -762,8 +762,8 @@ Sistem baslatildiginda acik oturumlari tarar ve birini veri kaynagi olarak atar:
   3. Cookie olan hesaplarda adaptor_oturum_gecerli_mi() cagir
   4. Gecerli oturumlardan ilk bulunani veri kaynagi yap
   5. Veri kaynagi bilgisini kaydet:
-       _VERI_KAYNAGI_KURUM="ziraat"
-       _VERI_KAYNAGI_HESAP="111111"
+       _FIYAT_KAYNAGI_KURUM="ziraat"
+       _FIYAT_KAYNAGI_HESAP="111111"
 ```
 
 Ornek:
@@ -786,7 +786,7 @@ Veri kaynaginin oturumu duserse sistem otomatik olarak yedek kaynaga gecer:
 
 ```
 [FAILOVER AKISI]
-  veri_kaynagi_fiyat_al("THYAO")
+  fiyat_kaynagi_fiyat_al("THYAO")
     |
     +-> Aktif kaynak (ziraat/111111) uzerinden adaptor_hisse_bilgi_al
     |     Basarili -> veri dondur
@@ -808,10 +808,10 @@ Bu oturum icin de oturum koruma dongusu calistirilir:
 
 ```
 [VERI KAYNAGI KORUMA]
-  robot_baslat ile birlikte degil, veri_kaynagi_baslat ile baslar.
+  robot_baslat ile birlikte degil, fiyat_kaynagi_baslat ile baslar.
   Ayri bir arka plan prosesidir.
 
-  /tmp/borsa/ziraat/111111/veri_kaynagi.pid    # koruma dongusu PID'si
+  /tmp/borsa/ziraat/111111/fiyat_kaynagi.pid    # koruma dongusu PID'si
 
   while veri kaynagi aktif:
     +-> adaptor_oturum_uzat("ziraat", "111111")
@@ -826,8 +826,8 @@ Bu demektir ki veri kaynagi olan hesabin robotu olmasa bile oturumu korunur.
 Kullanici isterse veri kaynagini manuel belirleyebilir:
 
 ```
-veri_kaynagi_ayarla ziraat 111111     # bu hesap veri kaynagi olsun
-veri_kaynagi_goster                   # aktif veri kaynagini goster
+fiyat_kaynagi_ayarla ziraat 111111     # bu hesap veri kaynagi olsun
+fiyat_kaynagi_goster                   # aktif veri kaynagini goster
 ```
 
 Manuel secim otomatik secimin onune gecer.
@@ -845,15 +845,15 @@ Cozum: Tarama katmani son cekilen veriyi kisa sureligine dosyaya saklar.
 
 ```
 [ONBELLEK AKISI]
-  Robot 1: veri_kaynagi_fiyat_al("THYAO")
+  Robot 1: fiyat_kaynagi_fiyat_al("THYAO")
     +-> Onbellekte var mi? Evet, 3 saniye once cekilmis
     |     -> onbellekten dondur (HTTP istegi yapilmaz)
 
-  Robot 3: veri_kaynagi_fiyat_al("THYAO")
+  Robot 3: fiyat_kaynagi_fiyat_al("THYAO")
     +-> Onbellekte var mi? Evet, 4 saniye once cekilmis
     |     -> onbellekten dondur
 
-  Robot 1: veri_kaynagi_fiyat_al("THYAO")  (12 saniye sonra)
+  Robot 1: fiyat_kaynagi_fiyat_al("THYAO")  (12 saniye sonra)
     +-> Onbellekte var mi? Evet ama 12 saniye gecmis (esik: 10 sn)
     |     -> sunucudan taze cek, onbellegi guncelle, Supabase'e kaydet
 ```
@@ -881,13 +881,13 @@ Supabase'e de yazilir. Boylece tum fiyat gecmisi kalici olarak saklanir.
 
 ```
 [KALICI KAYIT AKISI]
-  veri_kaynagi_fiyat_al("THYAO")
+  fiyat_kaynagi_fiyat_al("THYAO")
     +-> Onbellek eski -> sunucudan taze cek
     +-> Dosya onbellege yaz (hiz katmani)        <- gecici
-    +-> vt_fiyat_kaydet("THYAO", ...)             <- kalici (Supabase)
+    +-> OHLCV verisi tvDatafeed uzerinden ohlcv tablosuna yazilir (kalici)
          |                                        
-         +-> curl -s -X POST http://localhost:8001/rest/v1/fiyat_gecmisi
-               -d '{"sembol":"THYAO","fiyat":312.50,...}'
+         +-> curl -s -X POST http://localhost:8001/rest/v1/ohlcv
+               -d '{"sembol":"THYAO","periyot":"1G","kapanis":312.50,...}'
          +-> Basarisiz olursa islem engellenmez (hata toleransi)
 ```
 
@@ -905,7 +905,7 @@ Bu katmanin sagladigi avantajlar:
 
 ```
 [FIYAT ISTEGI]
-  Robot -> veri_kaynagi_fiyat_al("THYAO")
+  Robot -> fiyat_kaynagi_fiyat_al("THYAO")
            |
            +-> [1] Dosya onbellek kontrol (/tmp/borsa/_veri_onbellek/THYAO.dat)
            |     Taze (< 10 sn) -> onbellekten dondur, Supabase'e yazma
@@ -927,11 +927,11 @@ Ne robot ne strateji hangi adaptorun kullanildigini bilir.
 ```
 Robot: "THYAO fiyatini ver"
   |
-  +-> Tarama katmani: veri_kaynagi_fiyat_al("THYAO")
+  +-> Tarama katmani: fiyat_kaynagi_fiyat_al("THYAO")
         |
         +-> Dosya onbellek kontrol -> yok veya eski
-        +-> _VERI_KAYNAGI_KURUM = "ziraat"
-        +-> _VERI_KAYNAGI_HESAP = "111111"
+        +-> _FIYAT_KAYNAGI_KURUM = "ziraat"
+        +-> _FIYAT_KAYNAGI_HESAP = "111111"
         +-> source adaptorler/ziraat.sh
         +-> adaptor_hisse_bilgi_al "THYAO"  (ziraat/111111 cookie ile)
         +-> Sonuc: "312.50  343.75  281.25  1.34  Surekli Islem"
@@ -940,17 +940,17 @@ Robot: "THYAO fiyatini ver"
         +-> Robota dondur
 ```
 
-Robot sadece `veri_kaynagi_fiyat_al("THYAO")` cagirir. Gerisini bilmez.
+Robot sadece `fiyat_kaynagi_fiyat_al("THYAO")` cagirir. Gerisini bilmez.
 
 ### 9.5 Veri Kaynagi Fonksiyonlari
 
 | Fonksiyon | Katman | Aciklama |
 |-----------|--------|----------|
-| veri_kaynagi_baslat | Tarama | Otomatik veya manuel kaynak sec, koruma baslar |
-| veri_kaynagi_durdur | Tarama | Koruma dongusunu durdur |
-| veri_kaynagi_ayarla | Tarama | Manuel kaynak secimi |
-| veri_kaynagi_goster | Tarama | Aktif kaynagi ve yedekleri goster |
-| veri_kaynagi_fiyat_al | Tarama | Sembol fiyat verisi (onbellekli) |
+| fiyat_kaynagi_baslat | Tarama | Otomatik veya manuel kaynak sec, koruma baslar |
+| fiyat_kaynagi_durdur | Tarama | Koruma dongusunu durdur |
+| fiyat_kaynagi_ayarla | Tarama | Manuel kaynak secimi |
+| fiyat_kaynagi_goster | Tarama | Aktif kaynagi ve yedekleri goster |
+| fiyat_kaynagi_fiyat_al | Tarama | Sembol fiyat verisi (onbellekli) |
 | veri_kaynagi_fiyatlar_al | Tarama | Birden fazla sembol (toplu sorgu) |
 | veri_kaynagi_gecmis_al | Tarama | Belirli sembolun gecmis fiyatlarini Supabase'den getirir |
 | _veri_onbellek_oku | Tarama | Dosyadan onbellek oku |
@@ -970,12 +970,12 @@ Robot sadece `veri_kaynagi_fiyat_al("THYAO")` cagirir. Gerisini bilmez.
   ...
 
 [VERI KAYNAGI SECIMI - Terminal 1]
-  veri_kaynagi_baslat
+  fiyat_kaynagi_baslat
     -> Acik oturumlar taraniyor...
     -> Veri kaynagi: ziraat/111111 (otomatik)
     -> Yedekler: ziraat/222222, garanti/333333, garanti/444444, ...
     -> Oturum koruma baslatildi (PID 3001)
-    -> /tmp/borsa/ziraat/111111/veri_kaynagi.pid = 3001
+    -> /tmp/borsa/ziraat/111111/fiyat_kaynagi.pid = 3001
 
 [ROBOT BASLATMA - Terminal 1]
   robot_baslat ziraat 111111 strateji_a.sh   -> PID 4501
@@ -998,7 +998,7 @@ Robot sadece `veri_kaynagi_fiyat_al("THYAO")` cagirir. Gerisini bilmez.
 
 [FAILOVER SENARYOSU]
   ziraat/111111 oturumu duser (sunucu kapatti):
-    -> veri_kaynagi_fiyat_al basarisiz
+    -> fiyat_kaynagi_fiyat_al basarisiz
     -> _veri_failover: yedek listesinden ziraat/222222 denenir
     -> adaptor_oturum_gecerli_mi("ziraat", "222222") -> gecerli
     -> Yeni veri kaynagi: ziraat/222222
@@ -1178,7 +1178,7 @@ Su an aktif kullanmadigimiz bilesenler (Docker'da calisir ama biz istek atmayiz)
 - GoTrue (kimlik dogrulama - tek kullanici oldugumuz icin gereksiz)
 - Realtime (canli bildirim - su an Bash'ten kullanilmiyor. Ileride Python veya
   JavaScript istemci ile canli fiyat akisi dinleme yapilabilir. PostgreSQL
-  tarafinda fiyat_gecmisi tablosuna INSERT yapildiginda Realtime otomatik
+  tarafinda ohlcv tablosuna INSERT yapildiginda Realtime otomatik
   olarak yayin yapar, ek bir ayar gerektirmez.)
 - Storage (dosya depolama - ihtiyacimiz yok)
 
@@ -1408,49 +1408,35 @@ oturum_log tablosu:
   zaman           TIMESTAMPTZ  DEFAULT NOW()
 ```
 
-#### 11.5.7 fiyat_gecmisi
+#### 11.5.7 fiyat_gecmisi (KALDIRILDI - ohlcv tablosuna tasinmistir)
 
-Tarama katmanindan cekilen fiyat verilerinin kalici kaydini tutar.
-Her taze cekim aninda (onbellek eski veya bos oldugunda) bir satir eklenir.
-Strateji gelistirme, backtesting ve gecmis analiz icin kullanilir.
+> **NOT:** Bu tablo artik kullanilmiyor. Tum fiyat verileri `ohlcv` tablosunda
+> (Bolum 10) tutuluyor. tvDatafeed entegrasyonu ile cok periyotlu OHLCV mum
+> verileri (1dk, 3dk, 5dk, 15dk, 30dk, 45dk, 1S, 2S, 3S, 4S, 1G, 1A)
+> dogrudan ohlcv tablosuna yaziliyor.
+>
+> Eski `fiyat_gecmisi` tek boyutlu (fiyat+zaman) kaydi icin tasarlanmisti
+> ancak hicbir zaman veri yazilmadi (0 satir). Tablo canli DB'den ve
+> sema.sql'den kaldirildi.
 
-```
-fiyat_gecmisi tablosu:
-  id              BIGINT       PRIMARY KEY (otomatik)
-  sembol          TEXT         NOT NULL    (THYAO, AKBNK vb)
-  fiyat           NUMERIC(12,4) NOT NULL   (son islem fiyati)
-  tavan           NUMERIC(12,4)            (gunluk tavan fiyat)
-  taban           NUMERIC(12,4)            (gunluk taban fiyat)
-  degisim         NUMERIC(8,4)             (gunluk degisim yuzdesi)
-  hacim           BIGINT                   (islem hacmi, lot)
-  seans_durumu    TEXT                     (Surekli Islem, Kapali, Tek Fiyat vb)
-  kaynak_kurum    TEXT                     (veriyi hangi kurum oturumundan aldik)
-  kaynak_hesap    TEXT                     (hangi hesap oturumundan aldik)
-  zaman           TIMESTAMPTZ  DEFAULT NOW()
-```
-
-Ornek sorgular:
+Ornek sorgular (ohlcv tablosu uzerinden):
 
 ```sql
 -- THYAO son 30 gunluk kapanislar
-SELECT sembol, fiyat, zaman FROM fiyat_gecmisi
-  WHERE sembol = 'THYAO'
-  ORDER BY zaman DESC LIMIT 30;
+SELECT sembol, kapanis, tarih FROM ohlcv
+  WHERE sembol = 'THYAO' AND periyot = '1G'
+  ORDER BY tarih DESC LIMIT 30;
 
--- Bugunun tum fiyat hareketleri
-SELECT sembol, fiyat, degisim, hacim, zaman FROM fiyat_gecmisi
-  WHERE zaman::date = CURRENT_DATE
-  ORDER BY zaman;
+-- Bugunun tum 1 dakikalik mum verileri
+SELECT sembol, acilis, yuksek, dusuk, kapanis, hacim, tarih FROM ohlcv
+  WHERE tarih::date = CURRENT_DATE AND periyot = '1dk'
+  ORDER BY tarih;
 
--- En cok islem goren semboller (bugun)
-SELECT sembol, MAX(hacim) as maks_hacim FROM fiyat_gecmisi
-  WHERE zaman::date = CURRENT_DATE
+-- En cok islem goren semboller (bugun, gunluk periyot)
+SELECT sembol, MAX(hacim) as maks_hacim FROM ohlcv
+  WHERE tarih::date = CURRENT_DATE AND periyot = '1G'
   GROUP BY sembol ORDER BY maks_hacim DESC LIMIT 10;
 ```
-
-Not: Bu tablo zamanla buyuyebilir. Gunluk ortalama 50 sembol x 6 saat x
-6 cekim/saat = ~1800 satir/gun. Yillik ~450.000 satir — PostgreSQL icin
-cok kucuk bir boyut.
 
 ### 11.6 Veritabani Fonksiyonlari
 
@@ -1475,7 +1461,7 @@ Tum fonksiyonlar `veritabani/supabase.sh` icerisinde tanimlanir.
 | vt_halka_arz_kaydet | adaptor_halka_arz_talep/iptal/guncelle sonrasi | Halka arz islemini kaydeder |
 | vt_robot_log_yaz | robot_baslat/durdur, emir, hata anlarinda | Robot olayini loglar |
 | vt_oturum_log_yaz | adaptor_giris, adaptor_oturum_uzat, dusme anlarinda | Oturum olayini loglar |
-| vt_fiyat_kaydet | veri_kaynagi_fiyat_al taze cekim aninda | Fiyat verisini fiyat_gecmisi tablosuna yazar |
+| vt_fiyat_kaydet | (KALDIRILDI) | Eski fiyat_gecmisi tablosu kaldirildi, ohlcv kullaniliyor |
 
 #### 11.6.3 Okuma Fonksiyonlari
 
@@ -1486,8 +1472,8 @@ Tum fonksiyonlar `veritabani/supabase.sh` icerisinde tanimlanir.
 | vt_pozisyon_gecmisi | Belirli sembol ve hesap icin pozisyon degisimlerini getirir |
 | vt_gun_sonu_rapor | Gunun tum islemlerini ozetler |
 | vt_kar_zarar_rapor | Belirli donem icin toplam K/Z hesaplar |
-| vt_fiyat_gecmisi | Belirli sembol ve donem icin fiyat gecmisini getirir |
-| vt_fiyat_istatistik | Belirli sembol icin ort/min/maks/hacim istatistikleri |
+| vt_fiyat_gecmisi | Belirli sembol, periyot ve donem icin ohlcv tablosundan fiyat gecmisini getirir |
+| vt_fiyat_istatistik | Belirli sembol icin ohlcv tablosundan ort/min/maks/hacim istatistikleri |
 | vt_halka_arz_gecmisi | Belirli kurum/hesap icin halka arz islem gecmisi |
 | vt_robot_log_gecmisi | Belirli robot PID veya donem icin robot olaylarini getirir |
 | vt_oturum_log_gecmisi | Belirli kurum/hesap icin oturum olaylarini getirir |
@@ -1766,10 +1752,10 @@ tarama/ klasoru olusturulur.
 Veri kaynagi secim algoritmasi yazilir (otomatik + manuel).
 Iki katmanli veri depolama yazilir:
   - Dosya onbellek: /tmp/borsa/_veri_onbellek/ (gecici, hiz icin).
-  - Kalici gecmis: vt_fiyat_kaydet ile fiyat_gecmisi tablosuna yazma.
+  - Kalici gecmis: ohlcv tablosuna tvDatafeed uzerinden yazma.
 Failover mekanizmasi yazilir (otomatik yedege gecis).
 Veri kaynagi oturum koruma dongusu yazilir.
-vt_fiyat_gecmisi ve vt_fiyat_istatistik okuma fonksiyonlari yazilir.
+vt_fiyat_gecmisi ve vt_fiyat_istatistik okuma fonksiyonlari ohlcv tablosu uzerinden yazilir.
 
 ### 12.7 Asama 7 - Robot Motoru
 
@@ -2253,7 +2239,7 @@ yapilacak sorgular icin index olmadan performans dusecek:
 
 ```sql
 -- Bu sorgular index olmadan buyuk tablolarda yavaslar:
-WHERE sembol = 'THYAO' ORDER BY zaman DESC          -- fiyat_gecmisi
+WHERE sembol = 'THYAO' AND periyot = '1G' ORDER BY tarih DESC  -- ohlcv
 WHERE kurum = 'ziraat' AND hesap = '111111'          -- emirler, bakiye_gecmisi
 WHERE referans_no = 'ABC123'                         -- emirler
 ```
@@ -2261,7 +2247,7 @@ WHERE referans_no = 'ABC123'                         -- emirler
 **Cozum:** sema.sql dosyasina indexler eklenir:
 
 ```sql
-CREATE INDEX idx_fiyat_gecmisi_sembol_zaman ON fiyat_gecmisi(sembol, zaman DESC);
+-- ohlcv tablosu icin index zaten mevcut (idx_ohlcv_sembol_periyot_tarih)
 CREATE INDEX idx_emirler_kurum_hesap ON emirler(kurum, hesap);
 CREATE INDEX idx_emirler_referans ON emirler(referans_no);
 CREATE INDEX idx_bakiye_gecmisi_kurum_hesap ON bakiye_gecmisi(kurum, hesap, zaman DESC);

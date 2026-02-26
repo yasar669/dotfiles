@@ -1,0 +1,33 @@
+# BIST Katilim 30 Endeksi (30 hisse)
+# Kaynak: KAP (kap.org.tr/tr/Endeksler)
+# Not: Faiz geliri olmayan, katilim bankaciligi kriterlerine uyan sirketler.
+AKSA
+ALTNY
+ASELS
+BIMAS
+BSOKE
+CANTE
+CIMSA
+CWENE
+DAPGM
+EKGYO
+ENJSA
+EREGL
+EUPWR
+GENIL
+GESAN
+GLRMK
+GRSEL
+GUBRF
+KONTR
+KRDMD
+KTLEV
+KUYAS
+MAVI
+MPARK
+OBAMS
+PASEU
+PETKM
+TUPRS
+TUREX
+YEOTK

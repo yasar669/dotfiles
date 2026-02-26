@@ -22,28 +22,59 @@ _ROBOT_EMIR_KUYRUK_DIZIN="/tmp/borsa/_emir_kuyrugu"
 # =======================================================
 
 # -------------------------------------------------------
-# robot_baslat [--kuru] <kurum> <hesap> <strateji_dosyasi> [aralik]
+# robot_baslat [--kuru] [--semboller X,Y] [--liste ad] [--dosya yol] [--portfoy] <kurum> <hesap> <strateji_dosyasi> [aralik]
 # Yeni robot baslatir. Her robot ayri bir proses olarak calisir.
 # --kuru: Gercek emir gondermez, sadece loglar (KURU_CALISTIR=1).
+# --semboller: Virgul ile ayrilmis sembol listesi.
+# --liste: Endeks dosyasindan sembol yukle (bist30, bist100 vb.).
+# --dosya: Metin dosyasindan sembol yukle (her satirda bir sembol).
+# --portfoy: Hesaptaki mevcut pozisyonlardan sembol yukle.
 # -------------------------------------------------------
 robot_baslat() {
     local kuru_mod=0
+    local -a tarama_args=()
 
-    if [[ "$1" == "--kuru" ]]; then
-        kuru_mod=1
-        shift
-    fi
+    # Ilk asama: tarama ve kuru parametrelerini topla, geri kalanini konum olarak birak
+    local -a konum_args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --kuru)
+                kuru_mod=1
+                shift
+                ;;
+            --semboller|--liste|--dosya)
+                tarama_args+=("$1" "${2:-}")
+                shift 2
+                ;;
+            --portfoy)
+                tarama_args+=("$1")
+                shift
+                ;;
+            *)
+                konum_args+=("$1")
+                shift
+                ;;
+        esac
+    done
 
-    local kurum="$1"
-    local hesap="$2"
-    local strateji_dosyasi="$3"
-    local aralik="${4:-$_ROBOT_DONGU_ARALIGI}"
+    local kurum="${konum_args[0]:-}"
+    local hesap="${konum_args[1]:-}"
+    local strateji_dosyasi="${konum_args[2]:-}"
+    local aralik="${konum_args[3]:-$_ROBOT_DONGU_ARALIGI}"
 
     # Parametre kontrolu
     if [[ -z "$kurum" ]] || [[ -z "$hesap" ]] || [[ -z "$strateji_dosyasi" ]]; then
-        echo "Kullanim: robot_baslat [--kuru] <kurum> <hesap> <strateji.sh> [aralik_saniye]"
-        echo "  --kuru  : Gercek emir gondermez, test amacli"
-        echo "  aralik  : Tarama araligi (varsayilan: ${_ROBOT_DONGU_ARALIGI} sn)"
+        echo "Kullanim: robot_baslat [--kuru] [tarama secenekleri] <kurum> <hesap> <strateji.sh> [aralik_saniye]"
+        echo ""
+        echo "Tarama secenekleri:"
+        echo "  --semboller THYAO,AKBNK  : Virgul ile ayrilmis sembol listesi"
+        echo "  --liste bist30           : Endeks dosyasindan sembol yukle"
+        echo "  --dosya /yol/liste.txt   : Metin dosyasindan sembol yukle"
+        echo "  --portfoy                : Hesaptaki pozisyonlardan sembol yukle"
+        echo ""
+        echo "Diger secenekler:"
+        echo "  --kuru                   : Gercek emir gondermez, test amacli"
+        echo "  aralik                   : Tarama araligi (varsayilan: ${_ROBOT_DONGU_ARALIGI} sn)"
         return 1
     fi
 
@@ -84,11 +115,11 @@ robot_baslat() {
         rm -f "$pid_dosyasi"
     fi
 
-    # Veri kaynagi kontrolu
-    if [[ -z "$_VERI_KAYNAGI_KURUM" ]]; then
-        echo "Veri kaynagi baslatiliyor..."
-        veri_kaynagi_baslat || {
-            echo "HATA: Veri kaynagi baslatilamadi."
+    # Fiyat kaynagi kontrolu
+    if [[ -z "$_FIYAT_KAYNAGI_KURUM" ]]; then
+        echo "Fiyat kaynagi baslatiliyor..."
+        fiyat_kaynagi_baslat || {
+            echo "HATA: Fiyat kaynagi baslatilamadi."
             return 1
         }
     fi
@@ -99,6 +130,9 @@ robot_baslat() {
     echo "  Strateji : $strateji_dosyasi"
     echo "  Aralik   : ${aralik} sn"
     [[ "$kuru_mod" -eq 1 ]] && echo "  Mod      : KURU CALISTIRMA (emir gondermez)"
+    if [[ ${#tarama_args[@]} -gt 0 ]]; then
+        echo "  Semboller: ${tarama_args[*]}"
+    fi
 
     # Oturum koruma baslat (sahip: robot)
     cekirdek_oturum_koruma_baslat "$kurum" "$hesap" "robot"
@@ -116,12 +150,34 @@ robot_baslat() {
         export _ROBOT_PID=$$
         [[ "$kuru_mod" -eq 1 ]] && export KURU_CALISTIR=1
 
+        # Robot modunda DB yazimi aktif
+        _BORSA_BAGLAM_ROBOT=1
+
         # PID kaydet
         echo $$ > "$pid_dosyasi"
 
         # Strateji yukle
         # shellcheck source=/dev/null
         source "$strateji_yolu"
+
+        # Sembol listesini cozumle (tarayici.sh)
+        # Dis kaynak varsa tarayicidan al, yoksa strateji dosyasindaki
+        # STRATEJI_SEMBOLLER dizisi kullanilir (geriye uyumluluk).
+        if [[ ${#tarama_args[@]} -gt 0 ]]; then
+            local sembol_ciktisi
+            sembol_ciktisi=$(tarayici_sembolleri_coz "${tarama_args[@]}" 2>/dev/null)
+            if [[ -n "$sembol_ciktisi" ]]; then
+                # shellcheck disable=SC2034
+                STRATEJI_SEMBOLLER=()
+                while IFS= read -r _satir; do
+                    [[ -n "$_satir" ]] && STRATEJI_SEMBOLLER+=("$_satir")
+                done <<< "$sembol_ciktisi"
+                _cekirdek_log "Tarayicidan ${#STRATEJI_SEMBOLLER[@]} sembol yuklendi."
+            else
+                _cekirdek_log "HATA: Tarayicidan sembol cozumlenemedi."
+                exit 1
+            fi
+        fi
 
         # DB log yaz
         if declare -f vt_robot_log_yaz > /dev/null 2>&1; then
@@ -132,6 +188,21 @@ robot_baslat() {
         # Baslangic fonksiyonu varsa cagir
         if declare -f strateji_baslat > /dev/null 2>&1; then
             strateji_baslat
+        fi
+
+        # OHLCV takip listesine ekle (strateji periyotlari varsa)
+        if declare -f _takip_robot_ekle > /dev/null 2>&1; then
+            local _ohlcv_periyotlar_str
+            _ohlcv_periyotlar_str="${STRATEJI_OHLCV_PERIYOTLAR[*]:-}"
+            if [[ -n "$_ohlcv_periyotlar_str" ]]; then
+                local _sem
+                for _sem in "${STRATEJI_SEMBOLLER[@]}"; do
+                    _takip_robot_ekle "$_sem" "$strateji_adi" \
+                        "${STRATEJI_OHLCV_PERIYOTLAR[@]}"
+                done
+                _cekirdek_log "OHLCV takip: ${#STRATEJI_SEMBOLLER[@]} sembol, " \
+                    "${#STRATEJI_OHLCV_PERIYOTLAR[@]} periyot eklendi."
+            fi
         fi
 
         _cekirdek_log "Robot baslatildi: PID $$ ($kurum/$hesap, strateji: $strateji_adi)"
@@ -359,7 +430,7 @@ _robot_ana_dongu() {
         local sembol
         for sembol in "${STRATEJI_SEMBOLLER[@]}"; do
             local veri
-            veri=$(veri_kaynagi_fiyat_al "$sembol" 2>/dev/null)
+            veri=$(fiyat_kaynagi_fiyat_al "$sembol" 2>/dev/null)
             if [[ -z "$veri" ]]; then
                 continue
             fi
@@ -503,6 +574,16 @@ _robot_temizle() {
     # Strateji temizlik fonksiyonu varsa cagir
     if declare -f strateji_temizle > /dev/null 2>&1; then
         strateji_temizle 2>/dev/null
+    fi
+
+    # OHLCV takip listesinden cikar
+    if declare -f _takip_robot_cikar > /dev/null 2>&1; then
+        if [[ -n "${STRATEJI_SEMBOLLER[*]:-}" ]]; then
+            local _sem
+            for _sem in "${STRATEJI_SEMBOLLER[@]}"; do
+                _takip_robot_cikar "$_sem" "$_ROBOT_STRATEJI" 2>/dev/null
+            done
+        fi
     fi
 
     # PID dosyasini sil

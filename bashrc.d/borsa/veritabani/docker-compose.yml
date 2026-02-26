@@ -129,7 +129,9 @@ services:
       PG_META_DB_HOST: db
       PG_META_DB_PORT: 5432
       PG_META_DB_NAME: ${POSTGRES_DB:-postgres}
-      PG_META_DB_USER: supabase
+      # postgres kullanicisi kullanilir — supabase kullanicisi
+      # GRANT/BYPASSRLS olmadan tablolari goremez.
+      PG_META_DB_USER: postgres
       PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres_sifresi_yerel}
     networks:
       - borsa_net

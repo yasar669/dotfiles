@@ -9,7 +9,7 @@ gercek parayla islem yapmadan once gecmis veriler uzerinde test edilmesini sagla
 Backtest modulu mevcut sisteme sorunsuz entegre olur:
 - Strateji arayuzunu (sistem_plani.md Bolum 10.2) oldugu gibi kullanir.
 - Veri katmani array'lerini (veri_katmani_plani.md) simule eder.
-- Supabase fiyat_gecmisi tablosunu (sistem_plani.md Bolum 11.5.7) veri kaynagi olarak kullanir.
+- Supabase ohlcv tablosunu (sistem_plani.md Bolum 11.5.7) veri kaynagi olarak kullanir.
 - KURU_CALISTIR modunu (sistem_plani.md Bolum 14.3.1) temel alir ama ondan farklidir.
 - Robot motorunun (sistem_plani.md Bolum 7-8) dongu yapisini taklit eder.
 
@@ -39,7 +39,7 @@ olarak konumlanir. Katman atlamaz cunku katmanlarin icinde degil, disinda calisi
 
 +-----------------------------------------------+    +---------------------------+
 |  BACKTEST MOTORU (backtest/motor.sh)          |    |  YEREL SUPABASE           |
-|     Gecmis veri uzerinde strateji testi       |<-->|  fiyat_gecmisi tablosu    |
+|     Gecmis veri uzerinde strateji testi       |<-->|  ohlcv tablosu            |
 |     Sanal portfoy ve emir simulasyonu         |    |  backtest_sonuclari       |
 |     Performans metrikleri hesaplama           |    |  backtest_islemleri       |
 +-----------------------------------------------+    +---------------------------+
@@ -57,18 +57,19 @@ Backtest motoru:
 Backtest motoru gecmis fiyat verilerini uc kaynaktan alabilir.
 Kaynaklar oncelik sirasina gore denenir.
 
-### 3.1 Birincil Kaynak: Supabase fiyat_gecmisi Tablosu
+### 3.1 Birincil Kaynak: Supabase ohlcv Tablosu
 
-Tarama katmani her taze fiyat cekiminde fiyat_gecmisi tablosuna kayit yapar
-(sistem_plani.md Bolum 11.5.7). Backtest bu tablodan gecmis verileri okur.
+tvDatafeed entegrasyonu ile ohlcv tablosuna cok periyotlu mum verileri yazilir.
+Backtest bu tablodan gecmis verileri okur (varsayilan periyot: 1G).
 
 ```
-vt_fiyat_gecmisi("THYAO", "2025-01-01", "2025-06-01")
-  +-> curl -s "$_SUPABASE_URL/rest/v1/fiyat_gecmisi"
+vt_fiyat_gecmisi("THYAO", 30, "1G")
+  +-> curl -s "$_SUPABASE_URL/rest/v1/ohlcv"
         ?sembol=eq.THYAO
-        &zaman=gte.2025-01-01
-        &zaman=lte.2025-06-01
-        &order=zaman.asc
+        &periyot=eq.1G
+        &tarih=gte.2025-01-01
+        &tarih=lte.2025-06-01
+        &order=tarih.asc
   +-> JSON -> satirlara ayir -> backtest motoruna aktar
 ```
 
@@ -98,7 +99,7 @@ tarih,fiyat,tavan,taban,degisim,hacim
 CSV yukleme islemleri:
 1. Dosya okunur, baslik satiri dogrulanir (en az tarih ve fiyat zorunlu).
 2. Her satir parse edilir, eksik alanlar NULL olarak isaretlenir.
-3. Veriler fiyat_gecmisi tablosuna eklenir (kaynak_kurum="csv_import").
+3. Veriler ohlcv tablosuna eklenir (periyot="1G" olarak).
 4. Mevcut verilerle catisma varsa (ayni sembol+tarih) atlanir (UPSERT degil, INSERT).
 
 tavan ve taban bilgisi CSV'de yoksa onceki kapanistan hesaplanir:
@@ -120,10 +121,39 @@ backtest_sentetik_uret "TEST01" 100 250 0.02
 
 Uretim algoritmasi:
 - Geometric Brownian Motion (GBM) ile rastgele fiyat yolu uretir.
-- Parametreler: baslangic_fiyat, gun_sayisi, gunluk_volatilite, drift
+- Parametreler: baslangic_fiyat, gun_sayisi, gunluk_volatilite, drift (varsayilan: 0)
 - tavan/taban onceki kapanistan +/-%10 olarak hesaplanir.
 - hacim rastgele uretilir (normal dagilim, ortalama 10M, std 3M).
 - Uretilen veriler gecici bir dosyaya yazilir, Supabase'e kaydedilmez.
+
+Uygulama notu: `bc` exp()/log()/sqrt() icin sinirli destek saglar.
+Sentetik veri uretimi tamamen tek bir `awk` prosesi olarak yazilmalidir.
+awk, `exp()`, `log()`, `sqrt()`, `rand()`, `srand()` fonksiyonlarini
+dogrudan destekler. Box-Muller donusumu ile normal dagilim uretilebilir:
+
+```bash
+awk -v bas="$baslangic_fiyat" -v gun="$gun_sayisi" -v vol="$volatilite" \
+    -v drift=0 -v seed="$RANDOM" '
+BEGIN {
+    srand(seed)
+    fiyat = bas
+    for (i = 1; i <= gun; i++) {
+        # Box-Muller: iki uniform -> bir normal
+        u1 = rand(); u2 = rand()
+        z = sqrt(-2 * log(u1)) * cos(2 * 3.14159265 * u2)
+        # GBM: S(t+1) = S(t) * exp((drift - vol^2/2)*dt + vol*sqrt(dt)*z)
+        fiyat = fiyat * exp((drift - vol*vol/2) + vol * z)
+        # tavan/taban
+        tavan = fiyat * 1.10
+        taban = fiyat * 0.90
+        # hacim: normal dagilim (ort=10M, std=3M), minimum 100K
+        h1 = rand(); h2 = rand()
+        hacim = int(10000000 + 3000000 * sqrt(-2*log(h1)) * cos(2*3.14159265*h2))
+        if (hacim < 100000) hacim = 100000
+        printf "%04d-%02d-%02d,%.2f,%.2f,%.2f,0.00,%d\n", ...tarih..., fiyat, tavan, taban, hacim
+    }
+}'
+```
 
 ### 3.4 Veri Dogrulama
 
@@ -316,7 +346,15 @@ Coklu sembol modunda:
 - Her veri noktasinda tum semboller kronolojik sirada islenir.
 - Portfoy tum semboller icin ortaktir (nakit paylasilir).
 - strateji_degerlendir her sembol icin ayri cagrilir.
-- Tarih cakistirmasi yapilir: tum sembollerde ortak olan tarihler kullanilir.
+- Tarih hizalama algoritmasi:
+  1. Her sembolun tarih dizisi ayri yuklenir.
+  2. Tum tarihlerin _birlesimleri_ (union) alinir ve siralanir.
+  3. Her tarih icin her sembol kontrol edilir.
+  4. Bir sembolde o tarihte veri yoksa o sembol o gun atlanir (diger semboller islenir).
+  5. Hic bir sembolde veri olmayan tarih atlanir.
+  Bu yaklasim, "sadece ortak tarihler" yerine daha esnektir. Bir sembol
+  gecici olarak islem gormuyor olabilir ama diger semboller icin backtest
+  devam etmelidir.
 
 ```
 [GUN: 2024-03-15]
@@ -369,7 +407,7 @@ _BACKTEST_TARIH="2024-03-15"           # Simule edilen tarih
 _BACKTEST_GUN_NO=45                    # Baslangictan beri kacinci islem gunu
 ```
 
-Strateji bu degiskenlere erisebilir ama kullanimii opsiyoneldir.
+Strateji bu degiskenlere erisebilir ama kullanimi opsiyoneldir.
 Iyi yazilmis bir strateji bu degiskenlere BAGIMLI OLMAZ.
 
 ### 5.3 Walk-Forward Destegi
@@ -418,6 +456,25 @@ kabul edilir. Kullanici degistirebilir:
 
 ```
 borsa backtest ornek.sh --risksiz 0.40
+```
+
+Hesaplama notu — Sharpe ve Sortino awk ile hesaplanir:
+
+```bash
+# Sharpe: tum gunluk getirilerin standart sapmasi
+# Sortino: yalnizca negatif gunluk getirilerin standart sapmasi
+printf '%s\n' "${gunluk_getiriler[@]}" | awk -v rf="$risksiz_gunluk" '{
+    r = $1 - rf
+    sum += r; sumsq += r*r; n++
+    if (r < 0) { neg_sum += r; neg_sumsq += r*r; neg_n++ }
+} END {
+    ort = sum / n
+    std = (n > 1) ? sqrt((sumsq - sum*sum/n) / (n-1)) : 0
+    neg_std = (neg_n > 1) ? sqrt((neg_sumsq - neg_sum*neg_sum/neg_n) / (neg_n-1)) : 0
+    sharpe = (std > 0) ? ort / std * sqrt(252) : 0
+    sortino = (neg_std > 0) ? ort / neg_std * sqrt(252) : 0
+    printf "%.4f %.4f\n", sharpe, sortino
+}'
 ```
 
 ### 6.3 Detay Metrikleri
@@ -602,6 +659,11 @@ borsa backtest ornek.sh THYAO \
 | --sessiz | -s | (yok) | Sadece ozet tabloyu goster |
 | --detay | -d | (yok) | Her islemi tek tek goster |
 | --kaynak | -k | supabase | supabase, csv, sentetik |
+| --csv-dosya | -cf | (yok) | CSV dosya yolu (--kaynak csv ile zorunlu) |
+
+NOT: `--kaynak csv` secildiginde `--csv-dosya` parametresi zorunludur.
+Ornek: `borsa backtest ornek.sh THYAO --kaynak csv --csv-dosya thyao_2024.csv`
+`--kaynak sentetik` secildiginde ek parametre gerekmez (varsayilan: 250 gun, %2 volatilite).
 
 ### 8.3 Diger Alt Komutlar
 
@@ -628,17 +690,27 @@ borsa backtest sentetik TEST01 100 250 0.02
 
 cekirdek.sh'deki borsa() fonksiyonuna eklenmesi gereken case blogu:
 
+cekirdek.sh'deki borsa() fonksiyonu if-elif zinciri kullanir (case degil).
+Mevcut yapi: `kurallar`, `gecmis`, `mutabakat`, `robot`, `veri` bloklari.
+Backtest blogu ayni pattern ile eklenir:
+
 ```bash
-case "$kurum" in
-    kurallar) ... ;;              # mevcut
-    gecmis)   ... ;;              # sistem_plani.md Bolum 14.1.4
-    mutabakat) ... ;;             # sistem_plani.md Bolum 14.1.4
-    backtest) shift; _backtest_yonlendir "$@" ;;   # YENI
-    *) # normal kurum yonlendirmesi
-esac
+    # Ozel komut: borsa backtest — Gecmis veri uzerinde strateji testi
+    if [[ "$kurum" == "backtest" ]]; then
+        _backtest_yonlendir "$komut" "$@"
+        return 0
+    fi
 ```
 
+Bu blok, `borsa veri` blogundan sonra ve kurum surucu aramasindan once eklenir.
 `_backtest_yonlendir` fonksiyonu backtest/ klasorundeki ilgili fonksiyonu cagirir.
+
+Ayrica `borsa()` fonksiyonunun bos cagrildiginda gosterilen yardim metnine
+(cekirdek.sh icindeki `echo "Kullanim: ..."` satiri) su satir eklenir:
+
+```
+echo "         borsa backtest <strateji.sh> <SEMBOL> [secenekler]"
+```
 
 ## 9. Dosya Yapisi
 
@@ -687,11 +759,212 @@ ilk cagrildiginda motor.sh source edilir (lazy loading):
 ```bash
 _backtest_yonlendir() {
     if [[ -z "${_BACKTEST_YUKLENDI:-}" ]]; then
-        source "$BORSA_DIZIN/backtest/motor.sh"
+        source "${BORSA_KLASORU}/backtest/motor.sh"
         _BACKTEST_YUKLENDI=1
     fi
     backtest_ana "$@"
 }
+```
+
+### 9.3 Fonksiyon Imzalari
+
+Her dosyanin dis dunyaya sundugu (veya ic olarak kullanilanin) fonksiyon imzalari
+asagida tanimlanmistir. Onek kurali: dis fonksiyonlar `backtest_` oneki,
+ic fonksiyonlar `_backtest_` oneki kullanir.
+
+#### 9.3.1 motor.sh Fonksiyonlari
+
+```bash
+# backtest_ana <komut> [argumanlar...]
+# CLI giris noktasi. "borsa backtest" sonrasindaki tum argumanlari alir.
+# Komutlar: <strateji.sh>, sonuclar, detay, karsilastir, yukle, sentetik
+# Donus: 0 = basarili, 1 = hata
+backtest_ana() { ... }
+
+# _backtest_calistir <strateji_dosyasi> <semboller> [secenekler...]
+# Asil backtest dongusunu calistiran ic fonksiyon.
+# Parametre parse islemi burada yapilir.
+# Tum --tarih, --nakit, --eslestirme vb. secenekleri alir.
+# Donus: 0 = basarili, 1 = hata
+_backtest_calistir() { ... }
+
+# _backtest_ana_dongu
+# Yuklenen veriler uzerinde satirlari itere eder.
+# Her satirda strateji_degerlendir() cagrilir, sinyal islenir.
+# Global _BACKTEST_* array'lerini gunceller.
+# Donus: 0
+_backtest_ana_dongu() { ... }
+
+# _backtest_parametreleri_coz <argumanlar...>
+# CLI argumanlarini parse eder, varsayilanlari atar.
+# Sonuclari _BACKTEST_AYAR_* degiskenlerine yazar:
+#   _BACKTEST_AYAR_TARIH_BAS, _BACKTEST_AYAR_TARIH_BIT,
+#   _BACKTEST_AYAR_NAKIT, _BACKTEST_AYAR_KOMISYON_ALIS,
+#   _BACKTEST_AYAR_KOMISYON_SATIS, _BACKTEST_AYAR_ESLESTIRME,
+#   _BACKTEST_AYAR_ISITMA, _BACKTEST_AYAR_RISKSIZ,
+#   _BACKTEST_AYAR_SESSIZ, _BACKTEST_AYAR_DETAY,
+#   _BACKTEST_AYAR_KAYNAK
+# Donus: 0 = basarili, 1 = gecersiz parametre
+_backtest_parametreleri_coz() { ... }
+```
+
+#### 9.3.2 portfoy.sh Fonksiyonlari
+
+```bash
+# _backtest_portfoy_olustur <baslangic_nakit>
+# Sanal portfoy array'lerini sifirlar ve baslangic nakitini atar.
+# _BACKTEST_PORTFOY, _BACKTEST_LOT, _BACKTEST_MALIYET vb. tanimlanir.
+# Donus: 0
+_backtest_portfoy_olustur() { ... }
+
+# _backtest_emir_isle <yon> <sembol> <lot> <fiyat> <tavan> <taban>
+# Sanal emri BIST kurallarina gore degerlendirir ve eslestirir.
+# Adimlar: fiyat adimi kontrolu -> tavan/taban -> bakiye/pozisyon -> eslestirme
+# yon: "ALIS" veya "SATIS"
+# Donus: 0 = eslesti, 1 = reddedildi. stdout'a sonuc mesaji yazar.
+_backtest_emir_isle() { ... }
+
+# _backtest_portfoy_guncelle <yon> <sembol> <lot> <fiyat> <komisyon>
+# Eslesen emrin portfoy etkisini uygular.
+# ALIS: nakit azalir, lot artar, maliyet guncellenir.
+# SATIS: nakit artar, lot azalir, K/Z hesaplanir.
+# Donus: 0
+_backtest_portfoy_guncelle() { ... }
+
+# _backtest_portfoy_deger_guncelle
+# Tum pozisyonlarin piyasa degerlerini _BACKTEST_PIYASA'dan hesaplar.
+# _BACKTEST_DEGER, _BACKTEST_KZ, _BACKTEST_KZ_YUZDE, _BACKTEST_PORTFOY[toplam] guncellenir.
+# Donus: 0
+_backtest_portfoy_deger_guncelle() { ... }
+
+# _backtest_komisyon_hesapla <lot> <fiyat> <yon>
+# Emir icin komisyon tutarini hesaplar.
+# stdout'a komisyon tutarini (TL) yazar. Ornek: "5.87"
+_backtest_komisyon_hesapla() { ... }
+```
+
+#### 9.3.3 metrik.sh Fonksiyonlari
+
+```bash
+# _backtest_gunluk_kaydet <gun_no> <tarih>
+# O gunun portfoy degerini _BACKTEST_GUNLUK_* dizilerine ekler.
+# Drawdown hesabi icin tepe takibi yapar.
+# Donus: 0
+_backtest_gunluk_kaydet() { ... }
+
+# _backtest_metrikleri_hesapla
+# Backtest tamamlandiktan sonra tum metrikleri hesaplar.
+# Sonuclari _BACKTEST_SONUC associative array'ine yazar:
+#   _BACKTEST_SONUC[toplam_getiri], _BACKTEST_SONUC[yillik_getiri],
+#   _BACKTEST_SONUC[maks_dusus], _BACKTEST_SONUC[sharpe],
+#   _BACKTEST_SONUC[sortino], _BACKTEST_SONUC[calmar],
+#   _BACKTEST_SONUC[basari_orani], _BACKTEST_SONUC[kz_orani],
+#   _BACKTEST_SONUC[toplam_komisyon], _BACKTEST_SONUC[ort_pozisyon_gun],
+#   _BACKTEST_SONUC[maks_kayip_seri]
+# bc ve awk ile hesaplama yapar.
+# Donus: 0
+_backtest_metrikleri_hesapla() { ... }
+
+# _backtest_islem_kaydet <gun_no> <tarih> <sembol> <yon> <lot> <fiyat> <komisyon>
+# Yapilan sanal islemi _BACKTEST_ISLEMLER dizisine ekler.
+# Donus: 0
+_backtest_islem_kaydet() { ... }
+```
+
+#### 9.3.4 rapor.sh Fonksiyonlari
+
+```bash
+# _backtest_rapor_goster
+# _BACKTEST_SONUC array'ini formatlayarak terminale yazdirir.
+# --sessiz modda kisaltilmis, --detay modda islem listeli cikti.
+# Donus: 0
+_backtest_rapor_goster() { ... }
+
+# _backtest_sonuc_kaydet
+# Backtest sonuclarini Supabase backtest_sonuclari tablosuna yazar.
+# Islemleri backtest_islemleri, gunluk verileri backtest_gunluk tablosuna yazar.
+# Supabase kapaliysa uyari verir, hata dondurmez.
+# Donus: 0
+_backtest_sonuc_kaydet() { ... }
+
+# _backtest_sonuclari_listele [--strateji <ad>] [--son <N>]
+# Gecmis backtest sonuclarini Supabase'den okuyup tablo olarak gosterir.
+# "borsa backtest sonuclar" alt komutunun arka ucu.
+# Donus: 0
+_backtest_sonuclari_listele() { ... }
+
+# _backtest_detay_goster <backtest_id>
+# Belirli bir backtest'in islem detaylarini Supabase'den okuyup gosterir.
+# "borsa backtest detay <id>" alt komutunun arka ucu.
+# Donus: 0 = basarili, 1 = bulunamadi
+_backtest_detay_goster() { ... }
+
+# _backtest_karsilastir <id_1> <id_2>
+# Iki backtest sonucunu yan yana karsilastirir.
+# "borsa backtest karsilastir <id1> <id2>" alt komutunun arka ucu.
+# Donus: 0 = basarili, 1 = bulunamadi
+_backtest_karsilastir() { ... }
+```
+
+#### 9.3.5 veri.sh Fonksiyonlari
+
+```bash
+# _backtest_veri_yukle <sembol> <baslangic_tarih> <bitis_tarih> <kaynak>
+# Belirtilen kaynaktan gecmis fiyat verilerini yukler.
+# Kaynak oncelik sirasi: supabase -> csv -> sentetik
+# Veriyi _BACKTEST_VERI_* dizilerine yazar:
+#   _BACKTEST_VERI_TARIH[@], _BACKTEST_VERI_FIYAT[@],
+#   _BACKTEST_VERI_TAVAN[@], _BACKTEST_VERI_TABAN[@],
+#   _BACKTEST_VERI_DEGISIM[@], _BACKTEST_VERI_HACIM[@],
+#   _BACKTEST_VERI_SEANS[@]
+# Donus: 0 = veri yuklendi, 1 = veri bulunamadi
+_backtest_veri_yukle() { ... }
+
+# _backtest_supabase_oku <sembol> <baslangic_tarih> <bitis_tarih> [periyot]
+# Supabase ohlcv tablosundan veri ceker.
+# curl ile REST API sorgusu yapar, JSON'dan parse eder.
+# Donus: 0 = veri var, 1 = bos veya hata
+_backtest_supabase_oku() { ... }
+
+# _backtest_csv_oku <dosya_yolu> <sembol>
+# CSV dosyasindan fiyat verisini okur.
+# Baslik satiri dogrulanir, satirlar parse edilir.
+# Eksik tavan/taban degerlerini onceki kapanistan hesaplar.
+# Donus: 0 = basarili, 1 = dosya okunamadi veya format hatasi
+_backtest_csv_oku() { ... }
+
+# _backtest_sentetik_uret <sembol> <baslangic_fiyat> <gun_sayisi> <volatilite>
+# GBM (Geometric Brownian Motion) ile yapay fiyat verisi uretir.
+# awk kullanir (exp, log, sqrt, rand fonksiyonlari icin).
+# Donus: 0
+_backtest_sentetik_uret() { ... }
+
+# backtest_veri_yukle_csv <dosya_yolu> <sembol> [periyot]
+# Dis komut: CSV dosyasindan ohlcv tablosuna toplu veri aktarir.
+# "borsa backtest yukle" alt komutunun arka ucu.
+# Donus: 0 = basarili, 1 = hata
+backtest_veri_yukle_csv() { ... }
+```
+
+#### 9.3.6 veri_dogrula.sh Fonksiyonlari
+
+```bash
+# _backtest_veriyi_dogrula
+# _BACKTEST_VERI_* dizilerindeki verilere Bolum 3.4'teki 6 kontrolu uygular.
+# Basarisiz satirlari atlar, uyari loglar.
+# Donus: 0 = en az 5 gecerli gun var, 1 = yetersiz veri
+_backtest_veriyi_dogrula() { ... }
+
+# _backtest_tarih_sirala
+# _BACKTEST_VERI_* dizilerini tarih sirasina gore yeniden siralar.
+# Donus: 0
+_backtest_tarih_sirala() { ... }
+
+# _backtest_bosluk_kontrol
+# Ardisik islem gunleri arasinda 5+ gunluk bosluk olup olmadigini kontrol eder.
+# Bosluk varsa uyari yazar ama backtest'i durdurmaz.
+# Donus: 0
+_backtest_bosluk_kontrol() { ... }
 ```
 
 ## 10. Tab Tamamlama
@@ -700,19 +973,35 @@ tamamlama.sh dosyasina (sistem_plani.md Bolum 14.3.2) eklenecek tamamlamalar:
 
 ```bash
 # borsa backtest <TAB>
-# -> strateji/ klasorundeki .sh dosyalari listelenir
+# -> alt komutlar: sonuclar, detay, karsilastir, yukle, sentetik
+# -> ardindan strateji/ klasorundeki .sh dosyalari listelenir
 
 # borsa backtest ornek.sh <TAB>
-# -> sembol tamamlama (fiyat_gecmisi tablosundaki semboller)
+# -> sembol tamamlama (ohlcv tablosundaki semboller veya sabit liste)
 
 # borsa backtest ornek.sh THYAO --<TAB>
-# -> tarih, nakit, komisyon-alis, komisyon-satis, eslestirme, isitma, risksiz, sessiz, detay
+# -> tarih, nakit, komisyon-alis, komisyon-satis, eslestirme, isitma, risksiz, sessiz, detay, kaynak
+
+# borsa backtest ornek.sh THYAO --eslestirme <TAB>
+# -> KAPANIS, LIMIT
+
+# borsa backtest ornek.sh THYAO --kaynak <TAB>
+# -> supabase, csv, sentetik
 
 # borsa backtest sonuclar --<TAB>
 # -> strateji, son
 
 # borsa backtest karsilastir <TAB>
-# -> son backtest id'leri
+# -> son backtest id'leri (Supabase'den sorgulanir)
+
+# borsa backtest yukle <TAB>
+# -> .csv dosyalari (bulunulan dizindeki)
+
+# borsa backtest yukle thyao.csv <TAB>
+# -> sembol tamamlama
+
+# borsa backtest sentetik <TAB>
+# -> sembol tamamlama
 ```
 
 ## 11. Matematiksel Hesaplamalar ve Bash Sinirlamalari
@@ -768,7 +1057,7 @@ _backtest_yonlendir lazy loading mekanizmasi yazilir.
 
 ### 12.2 Adim 2 - Veri Katmani
 
-veri.sh icinde Supabase'den fiyat_gecmisi okuma fonksiyonu yazilir.
+veri.sh icinde Supabase'den ohlcv okuma fonksiyonu yazilir.
 veri.sh icinde CSV parse fonksiyonu yazilir.
 veri.sh icinde sentetik veri uretme fonksiyonu yazilir.
 veri_dogrula.sh icinde tum dogrulama kontrolleri yazilir.
@@ -827,11 +1116,11 @@ Bu bolum backtest planinin diger plan dosyalariyla nasil iliskilendigini gosteri
 | 2. Katmanli Mimari | Backtest katman disinda bagimsiz arac |
 | 4. Algoritmik Islem Dongusu | Backtest ayni donguyu gecmis veriyle uygular |
 | 10.2 Strateji Arayuzu | Backtest strateji_degerlendir() oldugu gibi kullanir |
-| 11.5.7 fiyat_gecmisi | Backtest birincil veri kaynagi |
+| 11.5.7 ohlcv (eski fiyat_gecmisi) | Backtest birincil veri kaynagi |
 | 11.8 Hata Toleransi | Backtest ayni hata toleransi ilkesini uygular |
 | 12. Yol Haritasi | Backtest Asama 8 sonrasi veya paralel |
 | 14.1.4 Kurumsuz komutlar | "backtest" yeni kurumsuz komut olarak eklenir |
-| 14.3.1 KURU_CALISTIR | Backtest farkli bur arac, KURU_CALISTIR canli mod |
+| 14.3.1 KURU_CALISTIR | Backtest farkli bir arac, KURU_CALISTIR canli mod |
 | 14.3.2 Tab tamamlama | Backtest icin tamamlama eklenir |
 
 ### 13.2 veri_katmani_plani.md ile Iliskiler
@@ -881,15 +1170,15 @@ printf '%s\n' "${fiyatlar[@]}" | awk '
 
 **Hangi adimda cozulmeli:** Adim 3 (Simulasyon Motoru).
 
-#### 14.1.2 fiyat_gecmisi Tablosunun Bos Olmasi
+#### 14.1.2 ohlcv Tablosunda Veri Yetersizligi
 
-**Sorun:** Yeni kurulumlarda fiyat_gecmisi tablosunda hic veri yoktur.
-Sistem kullanildikca veri birikir ama bu aylar surebilir.
+**Sorun:** Yeni kurulumlarda ohlcv tablosunda hic veri yoktur.
+tvDatafeed ile veri toplandikca dolacak ama bu zaman alabilir.
 
 **Etki:** Backtest calistirilamaz veya cok kisa doneme sinirli kalir.
 
 **Cozum:** CSV yuklem fonksiyonu ile harici kaynaklardan veri yuklenebilir.
-Dokumantasyonda ornerilecek ucretsiz veri kaynaklari:
+Dokumantasyonda onerilecek ucretsiz veri kaynaklari:
 - TCMB EVDS (gecmis kapanislar, gunluk)
 - Yahoo Finance CSV indirme (yfinance Python paketi ile)
 - Borsaya ozel veri saglayicilar
@@ -908,12 +1197,12 @@ dahil edilemez. Bu durum sonuclari olumlu yonde saptirabilir.
 
 **Cozum:** Tamamen onlenemez ama kullaniciya uyari verilir:
 - Rapor sonunda `UYARI: Hayatta kalma yanliligi icermektedir` notu.
-- Dokuumantasyonda bu sinirlama aciklanir.
+- Dokumantasyonda bu sinirlama aciklanir.
 
 #### 14.2.2 Kayma (Slippage) Modeli Yok
 
 **Sorun:** Gercek piyasada buyuk emirler istenen fiyattan degil, daha kotu
-bir fiyattan eslesibelir (ozellikle dusuk hacimli hisselerde). Backtest
+bir fiyattan eslesebilir (ozellikle dusuk hacimli hisselerde). Backtest
 motorunda bu etki modellenmez.
 
 **Etki:** Backtest sonuclari gercek performanstan daha iyi gorunur.
@@ -931,22 +1220,19 @@ sekilde test edilemez.
 
 **Etki:** Gun ici stratejiler kullanilmaz.
 
-**Cozum:** Veri kaynagi gun ici destegi saglarsa (fiyat_gecmisi tablosu
-zaten anlik kayitlar icerebilir) ileri asamada eklenebilir. Baslangicta
-sadece gunluk kapanis verisi desteklenir.
+**Cozum:** ohlcv tablosu zaten cok periyotlu veri icerir (1dk'dan 1A'ya kadar).
+Gun ici stratejiler dakikalik periyotlar (1dk, 5dk, 15dk) ile test edilebilir.
+Backtest'e --periyot parametresi ile istenilen zaman dilimi belirtilebilir.
 
 ### 14.3 Orta Sorunlar
 
-#### 14.3.1 Strateji Arayuzu Henuz Kesinlesmemis
+#### 14.3.1 Strateji Arayuzu (COZULDU)
 
-**Sorun:** sistem_plani.md Bolum 14.2.6'da belirtildigi gibi strateji arayuzu
-henuz kesin degil. Backtest bu arayuze bagimlidir.
-
-**Cozum:** Strateji arayuzu (sistem_plani.md Asama 8) kesinlesince backtest
-modulu buna uyumlu hale getirilir. Mevcut plandaki ornek arayuz
-(Bolum 10.2.1) uzerinden ilerlenebilir.
-
-**Hangi adimda cozulmeli:** Adim 1 oncesinde veya Adim 1 ile birlikte.
+**Durum:** COZULDU. strateji/ornek.sh icerisinde strateji arayuzu tam olarak
+uygulanmistir. strateji_baslat(), strateji_degerlendir() (7 parametreli) ve
+strateji_temizle() fonksiyonlari calisan kodda mevcuttur. Robot motoru
+(robot/motor.sh) bu arayuzu canli ortamda kullanmaktadir.
+Bu madde artik bir risk degildir.
 
 #### 14.3.2 Coklu Sembol Tarih Hizalama
 
@@ -954,17 +1240,18 @@ modulu buna uyumlu hale getirilir. Mevcut plandaki ornek arayuz
 borsadan gecici cikarilma). Coklu sembol backtest'inde tarihlerin hizanmasi
 gerekir.
 
-**Cozum:** Tum sembollerde ortak olan tarihler kullanilir. Bir sembolde veri
-olmayan gun icin o sembol atlanir (diger semboller islenir).
+**Cozum:** Tum tarihlerin birlesimleri (union) alinir ve siralanir.
+Bir sembolde o tarihte veri yoksa o sembol o gun atlanir,
+diger semboller islenir. Detay icin Bolum 4.4'e bakiniz.
 
 ### 14.4 Sorun Ozet Tablosu
 
 | No | Oncelik | Sorun | Adim |
 |----|---------|-------|------|
 | 14.1.1 | Kritik | Bash ondalik aritmetik siniri | Adim 3 |
-| 14.1.2 | Kritik | fiyat_gecmisi tablosu bos | Adim 2 |
+| 14.1.2 | Kritik | ohlcv tablosu bos (yeni kurulum) | Adim 2 |
 | 14.2.1 | Onemli | Hayatta kalma yanliligi | Dokumantasyon |
 | 14.2.2 | Onemli | Kayma modeli yok | Gelecek |
 | 14.2.3 | Onemli | Gun ici islem destegi yok | Gelecek |
-| 14.3.1 | Orta | Strateji arayuzu kesinlesmemis | Adim 1 |
+| 14.3.1 | ~~Orta~~ | ~~Strateji arayuzu kesinlesmemis~~ COZULDU | - |
 | 14.3.2 | Orta | Coklu sembol tarih hizalama | Adim 6 |

@@ -348,6 +348,12 @@ _adim_supabase() {
         fi
     fi
 
+    # 4a. PostgREST schema cache yenile (yeni tablolar API'de gorunsun)
+    _bilgi "PostgREST schema cache yenileniyor..."
+    docker compose exec -T rest kill -s SIGUSR1 1 2>/dev/null \
+        && _ayrintili "PostgREST schema cache yenilendi." \
+        || _ayrintili "PostgREST SIGUSR1 hatasi (ilk kurulumda normal)."
+
     # 4b. PostgREST API erisim testi
     local anon_key_test
     anon_key_test=$(grep "^ANON_KEY=" "$vt_dizin/.env" 2>/dev/null | cut -d= -f2)

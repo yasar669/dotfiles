@@ -1,0 +1,10 @@
+# Favori Listem
+# Bu dosyaya takip etmek istediginiz sembolleri ekleyin.
+# Her satirda bir sembol, # ile yorum satirlari.
+#
+# Ornek kullanim:
+#   borsa robot baslat --liste favori ziraat 123456 ornek.sh
+#
+# THYAO
+# GARAN
+# AKBNK

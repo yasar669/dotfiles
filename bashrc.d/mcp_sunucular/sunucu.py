@@ -21,6 +21,10 @@ from mcp.server.fastmcp import FastMCP
 
 from araclar.bist_araclari import bist_araclarini_kaydet
 from araclar.borsa_araclari import borsa_araclarini_kaydet
+from araclar.borsa_backtest_araclari import borsa_backtest_araclarini_kaydet
+from araclar.borsa_gecmis_araclari import borsa_gecmis_araclarini_kaydet
+from araclar.borsa_robot_araclari import borsa_robot_araclarini_kaydet
+from araclar.borsa_veri_araclari import borsa_veri_araclarini_kaydet
 from araclar.yazdir_araclari import yazdir_araclarini_kaydet
 from araclar.zamanlayici_araclari import zamanlayici_araclarini_kaydet
 
@@ -54,6 +58,10 @@ sunucu = FastMCP(
 # Tum araclari kaydet
 bist_araclarini_kaydet(sunucu)
 borsa_araclarini_kaydet(sunucu)
+borsa_backtest_araclarini_kaydet(sunucu)
+borsa_gecmis_araclarini_kaydet(sunucu)
+borsa_robot_araclarini_kaydet(sunucu)
+borsa_veri_araclarini_kaydet(sunucu)
 yazdir_araclarini_kaydet(sunucu)
 zamanlayici_araclarini_kaydet(sunucu)
 

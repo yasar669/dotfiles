@@ -40,6 +40,7 @@ bashrc.d/borsa/
 | Seans disi minimum tutar (Ziraat) | Emir oncesi otomatik | Tamam |
 | Tab tamamlama | borsa TAB | Tamam |
 | BIST kural sorgulama | borsa kurallar seans/fiyat/tavan/taban | Tamam |
+| DB yazim politikasi | db_yazim_politikasi.md | Planlanadi |
 
 ### 2.3 Eksik Islevler
 

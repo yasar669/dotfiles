@@ -105,21 +105,79 @@ CREATE TABLE IF NOT EXISTS oturum_log (
 );
 
 -- =========================================================
--- 7. fiyat_gecmisi
--- Tarama katmanindan cekilen fiyat verilerinin kalici kaydi.
+-- 7. fiyat_gecmisi (KALDIRILDI)
+-- Bu tablo artik kullanilmiyor. Tum fiyat verileri ohlcv
+-- tablosunda tutuluyor. Bkz: sema agaci BOLUM 10.
 -- =========================================================
-CREATE TABLE IF NOT EXISTS fiyat_gecmisi (
+
+
+-- =========================================================
+-- 8. backtest_sonuclari
+-- Her backtest calistirmasinin ozet sonucunu tutar.
+-- =========================================================
+CREATE TABLE IF NOT EXISTS backtest_sonuclari (
     id                  BIGSERIAL       PRIMARY KEY,
-    sembol              TEXT            NOT NULL,
-    fiyat               NUMERIC(12,4)   NOT NULL,
-    tavan               NUMERIC(12,4),
-    taban               NUMERIC(12,4),
-    degisim             NUMERIC(8,4),
-    hacim               BIGINT,
-    seans_durumu        TEXT,
-    kaynak_kurum        TEXT,
-    kaynak_hesap        TEXT,
+    strateji            TEXT            NOT NULL,
+    semboller           TEXT[]          NOT NULL,
+    baslangic_tarih     DATE            NOT NULL,
+    bitis_tarih         DATE            NOT NULL,
+    islem_gunu          INTEGER         NOT NULL,
+    baslangic_nakit     NUMERIC(14,2)   NOT NULL,
+    bitis_deger         NUMERIC(14,2)   NOT NULL,
+    toplam_getiri       NUMERIC(8,4),
+    yillik_getiri       NUMERIC(8,4),
+    maks_dusus          NUMERIC(8,4),
+    sharpe_orani        NUMERIC(8,4),
+    sortino_orani       NUMERIC(8,4),
+    calmar_orani        NUMERIC(8,4),
+    toplam_islem        INTEGER,
+    basarili_islem      INTEGER,
+    basari_orani        NUMERIC(6,2),
+    kz_orani            NUMERIC(8,4),
+    toplam_komisyon     NUMERIC(14,2),
+    ort_pozisyon_gun    NUMERIC(6,2),
+    maks_kayip_seri     INTEGER,
+    eslestirme          TEXT            DEFAULT 'KAPANIS',
+    komisyon_alis       NUMERIC(8,6),
+    komisyon_satis      NUMERIC(8,6),
+    parametreler        JSONB,
     zaman               TIMESTAMPTZ     DEFAULT NOW()
+);
+
+-- =========================================================
+-- 9. backtest_islemleri
+-- Backtest sirasinda yapilan her sanal islemin kaydi.
+-- =========================================================
+CREATE TABLE IF NOT EXISTS backtest_islemleri (
+    id                  BIGSERIAL       PRIMARY KEY,
+    backtest_id         BIGINT          REFERENCES backtest_sonuclari(id),
+    gun_no              INTEGER         NOT NULL,
+    tarih               DATE            NOT NULL,
+    sembol              TEXT            NOT NULL,
+    yon                 TEXT            NOT NULL,
+    lot                 INTEGER         NOT NULL,
+    fiyat               NUMERIC(12,4)   NOT NULL,
+    komisyon            NUMERIC(10,2),
+    nakit_sonrasi       NUMERIC(14,2),
+    portfoy_degeri      NUMERIC(14,2),
+    sinyal              TEXT,
+    zaman               TIMESTAMPTZ     DEFAULT NOW()
+);
+
+-- =========================================================
+-- 10. backtest_gunluk
+-- Gunluk portfoy degeri. Equity curve ve drawdown icin.
+-- =========================================================
+CREATE TABLE IF NOT EXISTS backtest_gunluk (
+    id                  BIGSERIAL       PRIMARY KEY,
+    backtest_id         BIGINT          REFERENCES backtest_sonuclari(id),
+    gun_no              INTEGER         NOT NULL,
+    tarih               DATE            NOT NULL,
+    nakit               NUMERIC(14,2)   NOT NULL,
+    hisse_degeri        NUMERIC(14,2)   NOT NULL,
+    toplam              NUMERIC(14,2)   NOT NULL,
+    dusus               NUMERIC(8,4),
+    UNIQUE(backtest_id, tarih)
 );
 
 
@@ -127,6 +185,36 @@ CREATE TABLE IF NOT EXISTS fiyat_gecmisi (
 -- INDEKSLER
 -- Sik yapilan sorgular icin performans indeksleri.
 -- =========================================================
+
+-- =========================================================
+-- 11. ohlcv
+-- OHLCV mum verileri. tvDatafeed, WSS ve Yahoo'dan gelen
+-- tum periyotlardaki mum verileri tek tabloda saklanir.
+-- Partition'lu yapi ile buyuk hacimde performansli calisir.
+-- =========================================================
+CREATE TABLE IF NOT EXISTS ohlcv (
+    id          BIGSERIAL,
+    sembol      VARCHAR(12)   NOT NULL,
+    periyot     VARCHAR(4)    NOT NULL,
+    tarih       TIMESTAMPTZ   NOT NULL,
+    acilis      NUMERIC(12,4) NOT NULL,
+    yuksek      NUMERIC(12,4) NOT NULL,
+    dusuk       NUMERIC(12,4) NOT NULL,
+    kapanis     NUMERIC(12,4) NOT NULL,
+    hacim       BIGINT        NOT NULL DEFAULT 0,
+    kaynak      VARCHAR(8)    DEFAULT 'tvdata',
+    guncelleme  TIMESTAMPTZ   DEFAULT NOW(),
+    PRIMARY KEY (sembol, periyot, tarih)
+);
+
+-- Performans indexleri — ohlcv
+CREATE INDEX IF NOT EXISTS idx_ohlcv_sembol_periyot
+    ON ohlcv (sembol, periyot, tarih DESC);
+
+CREATE INDEX IF NOT EXISTS idx_ohlcv_tarih
+    ON ohlcv (tarih DESC);
+
+-- INDEKSLER (diger tablolar)
 
 CREATE INDEX IF NOT EXISTS idx_emirler_kurum_hesap
     ON emirler(kurum, hesap);
@@ -155,8 +243,22 @@ CREATE INDEX IF NOT EXISTS idx_robot_log_kurum
 CREATE INDEX IF NOT EXISTS idx_oturum_log_kurum
     ON oturum_log(kurum, hesap, zaman DESC);
 
-CREATE INDEX IF NOT EXISTS idx_fiyat_gecmisi_sembol_zaman
-    ON fiyat_gecmisi(sembol, zaman DESC);
+-- idx_fiyat_gecmisi_sembol_zaman kaldirildi (tablo kaldirildi)
+
+CREATE INDEX IF NOT EXISTS idx_bt_sonuc_strateji
+    ON backtest_sonuclari(strateji);
+
+CREATE INDEX IF NOT EXISTS idx_bt_sonuc_zaman
+    ON backtest_sonuclari(zaman DESC);
+
+CREATE INDEX IF NOT EXISTS idx_bt_islem_backtest
+    ON backtest_islemleri(backtest_id);
+
+CREATE INDEX IF NOT EXISTS idx_bt_islem_sembol
+    ON backtest_islemleri(sembol, tarih);
+
+CREATE INDEX IF NOT EXISTS idx_bt_gunluk_backtest
+    ON backtest_gunluk(backtest_id, tarih);
 
 
 -- =========================================================
@@ -207,9 +309,78 @@ DO $$ BEGIN
     END IF;
 END $$;
 
-ALTER TABLE fiyat_gecmisi ENABLE ROW LEVEL SECURITY;
+-- fiyat_gecmisi RLS kaldirildi (tablo kaldirildi)
+
+ALTER TABLE backtest_sonuclari ENABLE ROW LEVEL SECURITY;
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'fiyat_gecmisi' AND policyname = 'anon_tam_erisim') THEN
-        CREATE POLICY anon_tam_erisim ON fiyat_gecmisi FOR ALL TO anon USING (true) WITH CHECK (true);
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'backtest_sonuclari' AND policyname = 'anon_tam_erisim') THEN
+        CREATE POLICY anon_tam_erisim ON backtest_sonuclari FOR ALL TO anon USING (true) WITH CHECK (true);
     END IF;
+END $$;
+
+ALTER TABLE backtest_islemleri ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'backtest_islemleri' AND policyname = 'anon_tam_erisim') THEN
+        CREATE POLICY anon_tam_erisim ON backtest_islemleri FOR ALL TO anon USING (true) WITH CHECK (true);
+    END IF;
+END $$;
+
+ALTER TABLE backtest_gunluk ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'backtest_gunluk' AND policyname = 'anon_tam_erisim') THEN
+        CREATE POLICY anon_tam_erisim ON backtest_gunluk FOR ALL TO anon USING (true) WITH CHECK (true);
+    END IF;
+END $$;
+
+ALTER TABLE ohlcv ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'ohlcv' AND policyname = 'anon_tam_erisim') THEN
+        CREATE POLICY anon_tam_erisim ON ohlcv FOR ALL TO anon USING (true) WITH CHECK (true);
+    END IF;
+END $$;
+
+
+-- =========================================================
+-- ROL YETKILENDIRME
+-- PostgREST (anon), Studio/pg_meta (supabase) ve
+-- authenticator rolleri icin gerekli tum yetkiler.
+-- Bu blok olmazsa:
+--   * PostgREST 404 doner (anon GRANT eksik)
+--   * Studio tablolari goremez (supabase GRANT eksik)
+--   * Studio veriyi goremez (supabase BYPASSRLS eksik)
+-- =========================================================
+
+-- anon: PostgREST API uzerinden erisim
+GRANT USAGE ON SCHEMA public TO anon;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON SEQUENCES TO anon;
+
+-- supabase: pg_meta / Studio metadata servisi
+GRANT USAGE ON SCHEMA public TO supabase;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO supabase;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO supabase;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON TABLES TO supabase;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON SEQUENCES TO supabase;
+-- Studio'nun RLS aktif tablolarda veri gorebilmesi icin
+ALTER ROLE supabase BYPASSRLS;
+
+-- authenticator: PostgREST baglanti rolu
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticator') THEN
+        EXECUTE 'GRANT USAGE ON SCHEMA public TO authenticator';
+        EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticator';
+    END IF;
+END $$;
+
+-- PostgREST schema cache yenile (sema.sql her calistiginda)
+-- SIGUSR1 sinyali gondererek yeni tablolarin API'de gorunmesini saglar.
+-- Docker ortaminda calismazsa sessizce atlanir.
+DO $$ BEGIN
+    PERFORM pg_notify('pgrst', 'reload schema');
 END $$;

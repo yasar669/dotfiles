@@ -1,0 +1,33 @@
+# BIST-30 Bilesenleri
+# Kaynak: KAP (kap.org.tr/tr/Endeksler)
+# Not: Bilesenler yilda 4 kez degisir (Ocak, Nisan, Temmuz, Ekim).
+AEFES
+AKBNK
+ASELS
+ASTOR
+BIMAS
+DSTKF
+EKGYO
+ENKAI
+EREGL
+FROTO
+GARAN
+GUBRF
+ISCTR
+KCHOL
+KRDMD
+MGROS
+PETKM
+PGSUS
+SAHOL
+SASA
+SISE
+TAVHL
+TCELL
+THYAO
+TOASO
+TRALT
+TTKOM
+TUPRS
+ULKER
+YKBNK

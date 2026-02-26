@@ -24,7 +24,7 @@ yazdir() {
         echo ""
         echo "KULLANIM:"
         echo "  yazdir [SECENEK] \"dosya.pdf\" sayfa-araligi"
-        echo "  yazdir [SECENEK] \"dosya.md\" tumu"
+        echo "  yazdir [SECENEK] \"dosya.md\" satir-araligi"
         echo ""
         echo "DESTEKLENEN DOSYA TURLERI:"
         echo "  .pdf              PDF dosyasi (dogrudan yazdirilir)"
@@ -35,10 +35,17 @@ yazdir() {
         echo "  -s, --siyahbeyaz  Siyah-beyaz baski (varsayilan)"
         echo "  -h, --yardim      Bu yardim mesajini goster"
         echo ""
-        echo "SAYFA ARALIGI ORNEKLERI:"
+        echo "PDF SAYFA ARALIGI ORNEKLERI:"
         echo "  5-10              Sayfa 5'ten 10'a kadar"
         echo "  157,159           Sadece sayfa 157 ve 159"
         echo "  3,7,12-15         Sayfa 3, 7 ve 12-15 arasi"
+        echo ""
+        echo "MARKDOWN ARALIK ORNEKLERI:"
+        echo "  MD dosyalarinda aralik VARSAYILAN olarak SATIR numarasidir."
+        echo "  tumu              Tum dosyayi yazdir"
+        echo "  10-85             Satir 10'dan 85'e kadar (varsayilan: satir)"
+        echo "  satir:10-85       Satir 10'dan 85'e kadar (acik belirtme)"
+        echo "  sayfa:1-3         PDF'e cevrildikten sonra sayfa 1-3 (eski davranis)"
         echo ""
         echo "ORNEK KOMUTLAR:"
         echo "  yazdir \"kitap.pdf\" 1-20"
@@ -47,18 +54,22 @@ yazdir() {
         echo "  yazdir -r \"harita.pdf\" 5-8"
         echo "      4 sayfayi renkli yazdir"
         echo ""
-        echo "  yazdir --renkli \"deneme.pdf\" 1-48"
-        echo "      48 sayfayi renkli yazdir"
-        echo ""
         echo "  yazdir \"konu.md\" tumu"
-        echo "      Markdown dosyasini HTML formatinda PDF'e cevirip tamamen yazdir"
+        echo "      Markdown dosyasini tamamen yazdir"
         echo ""
-        echo "  yazdir -r \"notlar.md\" 1-3"
-        echo "      Markdown'dan olusturulan PDF'in 1-3 sayfalarini renkli yazdir"
+        echo "  yazdir \"plan.md\" 1-50"
+        echo "      Markdown'in ilk 50 satirini yazdir"
+        echo ""
+        echo "  yazdir -r \"notlar.md\" satir:30-80"
+        echo "      Markdown'in 30-80 arasi satirlarini renkli yazdir"
+        echo ""
+        echo "  yazdir \"notlar.md\" sayfa:1-3"
+        echo "      Markdown'dan olusturulan PDF'in 1-3 sayfalarini yazdir"
         echo ""
         echo "NOT: Siyah-beyaz baski murekkep tasarrufu saglar."
         echo "     Harita, grafik gibi icerikler icin -r kullanin."
-        echo "     Markdown icin 'tumu' veya 'hepsi' sayfa araligi olarak verilebilir."
+        echo "     MD dosyalarinda 'tumu' veya 'hepsi' tum dosyayi yazdirir."
+        echo "     MD icin sayfa araligi istiyorsaniz 'sayfa:1-3' seklinde belirtin."
         echo ""
     }
     
@@ -114,7 +125,55 @@ yazdir() {
     local uzanti="${dosya##*.}"
     if [[ "${uzanti,,}" == "md" || "${uzanti,,}" == "markdown" ]]; then
         echo "Markdown dosyasi tespit edildi, HTML formatinda PDF'e cevriliyor..."
-        
+
+        local md_kaynak="$dosya"
+        local satir_gecici="/tmp/yazdir-satirlar.md"
+
+        # MD dosyalari icin aralik varsayilan olarak SATIR araligini ifade eder
+        # 'tumu' / 'hepsi' => tum dosya
+        # 'satir:10-85' veya '10-85' => 10-85 arasi satirlar
+        # 'sayfa:1-3' => PDF'e cevrildikten sonra sayfa araligi (eski davranis)
+        local sayfa_araligi_modu="hayir"
+        local satir_bas=""
+        local satir_bit=""
+
+        if [[ "$aralik" == "tumu" || "$aralik" == "hepsi" ]]; then
+            # Tum dosya, aynen devam
+            :
+        elif [[ "$aralik" == sayfa:* ]]; then
+            # Acik sayfa araligi istendi: 'sayfa:1-3'
+            aralik="${aralik#sayfa:}"
+            sayfa_araligi_modu="evet"
+        elif [[ "$aralik" == satir:* ]]; then
+            # Acik satir araligi: 'satir:10-85'
+            local satir_aralik="${aralik#satir:}"
+            satir_bas="${satir_aralik%-*}"
+            satir_bit="${satir_aralik#*-}"
+        elif [[ "$aralik" =~ ^[0-9]+-[0-9]+$ ]]; then
+            # Duz aralik (10-85) => MD icin varsayilan olarak satir araligi
+            satir_bas="${aralik%-*}"
+            satir_bit="${aralik#*-}"
+        fi
+
+        # Satir araligi belirtildiyse dosyadan o satirlari kes
+        if [[ -n "$satir_bas" && -n "$satir_bit" ]]; then
+            local toplam_satir
+            toplam_satir=$(wc -l < "$dosya")
+            if (( satir_bas < 1 )); then
+                satir_bas=1
+            fi
+            if (( satir_bit > toplam_satir )); then
+                satir_bit=$toplam_satir
+            fi
+            if (( satir_bas > satir_bit )); then
+                echo "HATA: Baslangic satiri ($satir_bas) bitis satirindan ($satir_bit) buyuk!"
+                return 1
+            fi
+            echo "Satir araligi: $satir_bas - $satir_bit (toplam $((satir_bit - satir_bas + 1)) satir)"
+            sed -n "${satir_bas},${satir_bit}p" "$dosya" > "$satir_gecici"
+            md_kaynak="$satir_gecici"
+        fi
+
         local html_gecici="/tmp/yazdir-md.html"
         local pdf_gecici="/tmp/yazdir-md.pdf"
         
@@ -123,7 +182,7 @@ yazdir() {
 import markdown
 import sys
 
-with open('$dosya', 'r', encoding='utf-8') as f:
+with open('$md_kaynak', 'r', encoding='utf-8') as f:
     md_icerik = f.read()
 
 html_govde = markdown.markdown(md_icerik, extensions=['tables', 'fenced_code', 'codehilite', 'toc'])
@@ -183,10 +242,17 @@ with open('$html_gecici', 'w', encoding='utf-8') as f:
 
         echo "Markdown basariyla PDF'e cevrildi."
         
-        # Dosyayi PDF olarak degistir, aralik verilmediyse tum sayfalari bas
+        # Gecici satir dosyasini temizle
+        rm -f "$satir_gecici"
+
+        # Dosyayi PDF olarak degistir
         dosya="$pdf_gecici"
-        
-        if [ "$aralik" == "tumu" ] || [ "$aralik" == "hepsi" ]; then
+
+        # Satir araligi veya tumu/hepsi ise PDF'in tamamini bas
+        if [[ -n "$satir_bas" || "$sayfa_araligi_modu" == "hayir" ]]; then
+            # Satir araligi zaten kesildigi icin veya tumu/hepsi denildigi icin
+            # PDF'in tum sayfalarini bas
+            if [[ "$sayfa_araligi_modu" == "hayir" ]]; then
             local toplam_sayfa
             toplam_sayfa=$(python3 -c "
 import subprocess
@@ -204,6 +270,10 @@ for line in result.stdout.split('\n'):
             else
                 aralik="1-50"
             fi
+            fi
+        else
+            # sayfa:1-3 gibi acik sayfa araligi, aralik zaten dogru ayarli
+            :
         fi
         
         # Gecici HTML dosyasini temizle
