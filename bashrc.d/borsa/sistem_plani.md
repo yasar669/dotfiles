@@ -689,7 +689,6 @@ Mevcut olanlara (M), yeni ekleneceklere (Y) isaret konmustur.
 | adaptor_cikis | Y | Oturumu kapatir (LogOff) |
 | adaptor_oturum_suresi_parse | Y | Giris yanitindan timeout suresini (saniye) parse eder |
 | adaptor_oturum_uzat | Y | Sessiz GET atarak oturumu uzatir, basarili=0, basarisiz=1 |
-| adaptor_hisse_bilgi_al | Y | Sembol icin son fiyat, tavan, taban, seans durumu dondurur |
 
 ## 7. Cekirdek Yeni Fonksiyonlar
 
@@ -748,8 +747,12 @@ Cozum: Veri kaynagi ve emir kanali tamamen ayri kavramlardir.
 
 ### 9.2 Veri Kaynagi Secimi
 
-Veri kaynagi acik oturumlardan biri secilerek belirlenir. Hangi kurum oldugu onemli degildir
-cunku BIST verisi tum kurumlarda aynidir.
+> **NOT (tvDatafeed Gecisi):** Asagidaki Bolum 9.2 - 9.5 arasindaki veri kaynagi mimarisi
+> tvDatafeed gecisiyle degismistir. Eski `fiyat_kaynagi_*` fonksiyonlari, `adaptor_hisse_bilgi_al`,
+> kurum REST polling ve failover mekanizmasi kaldirildirmistir.
+> Yeni mimari `canli_veri.sh` ve `_tvdatafeed_canli.py` daemon'u uzerine kuruludur.
+> Detaylar icin `tarama/tvdatafeed_gecis_plani.md` dosyasina bakiniz.
+> Yeni fonksiyonlar: `canli_veri_baslat/durdur/durum`, `canli_fiyat_al`, `canli_veri_sembol_ekle/cikar`.
 
 #### 9.2.1 Otomatik Secim Algoritmasi
 
@@ -944,18 +947,17 @@ Robot sadece `fiyat_kaynagi_fiyat_al("THYAO")` cagirir. Gerisini bilmez.
 
 ### 9.5 Veri Kaynagi Fonksiyonlari
 
+> **NOT:** Bu tablo tvDatafeed gecisi oncesine aittir. Guncel fonksiyonlar asagidadir.
+
 | Fonksiyon | Katman | Aciklama |
 |-----------|--------|----------|
-| fiyat_kaynagi_baslat | Tarama | Otomatik veya manuel kaynak sec, koruma baslar |
-| fiyat_kaynagi_durdur | Tarama | Koruma dongusunu durdur |
-| fiyat_kaynagi_ayarla | Tarama | Manuel kaynak secimi |
-| fiyat_kaynagi_goster | Tarama | Aktif kaynagi ve yedekleri goster |
-| fiyat_kaynagi_fiyat_al | Tarama | Sembol fiyat verisi (onbellekli) |
-| veri_kaynagi_fiyatlar_al | Tarama | Birden fazla sembol (toplu sorgu) |
-| veri_kaynagi_gecmis_al | Tarama | Belirli sembolun gecmis fiyatlarini Supabase'den getirir |
-| _veri_onbellek_oku | Tarama | Dosyadan onbellek oku |
-| _veri_onbellek_yaz | Tarama | Dosyaya onbellek yaz |
-| _veri_failover | Tarama | Kaynak dusunce yedege gec |
+| canli_veri_baslat | Tarama | tvDatafeed daemon'u baslatir |
+| canli_veri_durdur | Tarama | Daemon'u durdurur |
+| canli_veri_durum | Tarama | Daemon durumunu gosterir |
+| canli_fiyat_al | Tarama | Sembol fiyat verisi (daemon JSON'dan) |
+| canli_veri_sembol_ekle | Tarama | Canli takibe sembol ekler |
+| canli_veri_sembol_cikar | Tarama | Canli takipten sembol cikarir |
+| canli_veri_aktif_mi | Tarama | Daemon calisip calismadigini kontrol eder |
 
 ### 9.6 Tam Senaryo: 5 Robot, 3 Kurum, 10 Hesap
 

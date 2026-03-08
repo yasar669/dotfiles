@@ -16,6 +16,7 @@ _backtest_rapor_goster() {
     echo "=== BACKTEST SONUCU ==="
     echo "Strateji:        ${_BACKTEST_AYAR_STRATEJI:-bilinmiyor}"
     echo "Sembol:          ${_BACKTEST_AYAR_SEMBOLLER:-bilinmiyor}"
+    echo "Periyot:         ${_BACKTEST_AYAR_PERIYOT:-1G}"
     echo "Donem:           ${_BACKTEST_GUNLUK_TARIH[0]:-?} / ${_BACKTEST_GUNLUK_TARIH[-1]:-?} (${_BACKTEST_SONUC[gun_sayisi]:-0} islem gunu)"
 
     # Sayilari formatlayarak goster
@@ -85,9 +86,9 @@ _backtest_islem_listesi_goster() {
 _backtest_sayi_formatla() {
     local sayi="$1"
     local sonuc
-    # printf %' bazen hata kodu dondurse de cikti uretebiliyor
-    # Bu yuzden ciktiyi yakalayip hata kodundan bagimsiz kullaniyoruz
-    sonuc=$(printf "%'.2f" "$sayi" 2>/dev/null) || true
+    # bc/awk ciktilari nokta kullanir ama Turkce locale virgul bekler
+    # Ondalik noktayi virgule cevir
+    sonuc=$(printf "%'.2f" "${sayi/./,}" 2>/dev/null) || true
     if [[ -n "$sonuc" ]]; then
         echo "$sonuc"
     else
@@ -131,6 +132,7 @@ _backtest_sonuc_kaydet() {
         "toplam_komisyon": %s,
         "ort_pozisyon_gun": %s,
         "maks_kayip_seri": %s,
+        "periyot": "%s",
         "eslestirme": "%s",
         "komisyon_alis": %s,
         "komisyon_satis": %s
@@ -155,6 +157,7 @@ _backtest_sonuc_kaydet() {
         "${_BACKTEST_SONUC[toplam_komisyon]:-0}" \
         "${_BACKTEST_SONUC[ort_pozisyon_gun]:-0}" \
         "${_BACKTEST_SONUC[maks_kayip_seri]:-0}" \
+        "${_BACKTEST_AYAR_PERIYOT:-1G}" \
         "${_BACKTEST_AYAR_ESLESTIRME:-KAPANIS}" \
         "${_BACKTEST_AYAR_KOMISYON_ALIS:-0.00188}" \
         "${_BACKTEST_AYAR_KOMISYON_SATIS:-0.00188}")

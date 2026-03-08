@@ -194,11 +194,15 @@ _tarayici_portfoy_oku() {
         local kurum=""
         local hesap=""
 
-        # Oncelik: fiyat kaynagi kurumu
-        if [[ -n "${_FIYAT_KAYNAGI_KURUM:-}" ]] && [[ -n "${_FIYAT_KAYNAGI_HESAP:-}" ]]; then
-            kurum="$_FIYAT_KAYNAGI_KURUM"
-            hesap="$_FIYAT_KAYNAGI_HESAP"
-        fi
+        # Aktif oturumlardan ilk bulunan kurumu kullan
+        local k
+        for k in "${!_CEKIRDEK_AKTIF_HESAPLAR[@]}"; do
+            if [[ -n "${_CEKIRDEK_AKTIF_HESAPLAR[$k]:-}" ]]; then
+                kurum="$k"
+                hesap="${_CEKIRDEK_AKTIF_HESAPLAR[$k]}"
+                break
+            fi
+        done
 
         # Adaptor yuklu ve portfoy fonksiyonu mevcut mu?
         if [[ -n "$kurum" ]] && [[ -n "$hesap" ]]; then

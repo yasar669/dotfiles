@@ -115,11 +115,11 @@ robot_baslat() {
         rm -f "$pid_dosyasi"
     fi
 
-    # Fiyat kaynagi kontrolu
-    if [[ -z "$_FIYAT_KAYNAGI_KURUM" ]]; then
-        echo "Fiyat kaynagi baslatiliyor..."
-        fiyat_kaynagi_baslat || {
-            echo "HATA: Fiyat kaynagi baslatilamadi."
+    # Canli veri daemon kontrolu
+    if ! canli_veri_aktif_mi 2>/dev/null; then
+        echo "Canli veri daemon baslatiliyor..."
+        canli_veri_baslat || {
+            echo "HATA: Canli veri daemon baslatilamadi."
             return 1
         }
     fi
@@ -430,7 +430,7 @@ _robot_ana_dongu() {
         local sembol
         for sembol in "${STRATEJI_SEMBOLLER[@]}"; do
             local veri
-            veri=$(fiyat_kaynagi_fiyat_al "$sembol" 2>/dev/null)
+            veri=$(canli_fiyat_al "$sembol" 2>/dev/null)
             if [[ -z "$veri" ]]; then
                 continue
             fi

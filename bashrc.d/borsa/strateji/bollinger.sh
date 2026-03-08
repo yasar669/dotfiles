@@ -159,6 +159,14 @@ strateji_degerlendir() {
 }
 
 # =======================================================
+# strateji_min_mum — opsiyonel arayuz
+# Stratejinin gecerli sinyal uretebilmesi icin gereken minimum mum sayisi.
+# =======================================================
+strateji_min_mum() {
+    echo "20"
+}
+
+# =======================================================
 # strateji_temizle
 # =======================================================
 strateji_temizle() {

@@ -88,14 +88,18 @@ _backtest_metrikleri_hesapla() {
     toplam_getiri=$(echo "scale=4; ($bitis - $baslangic) / $baslangic * 100" | bc 2>/dev/null)
     _BACKTEST_SONUC[toplam_getiri]="${toplam_getiri:-0}"
 
-    # Yillik getiri: ((1 + r)^(252/gun) - 1) * 100
+    # Periyoda gore yillik mum sayisi
+    local mumluk_yil
+    mumluk_yil=$(_backtest_periyot_mumluk_yil "${_BACKTEST_AYAR_PERIYOT:-1G}")
+
+    # Yillik getiri: ((1 + r)^(mumluk_yil/gun) - 1) * 100
     local yillik_getiri
     if [[ "$gun_sayisi" -gt 0 ]]; then
-        yillik_getiri=$(awk -v r="$toplam_getiri" -v gun="$gun_sayisi" '
+        yillik_getiri=$(awk -v r="$toplam_getiri" -v gun="$gun_sayisi" -v myil="$mumluk_yil" '
         BEGIN {
             oran = r / 100
             if (gun > 0 && oran > -1) {
-                yillik = (exp(252/gun * log(1 + oran)) - 1) * 100
+                yillik = (exp(myil/gun * log(1 + oran)) - 1) * 100
                 printf "%.4f", yillik
             } else {
                 print "0.0000"
@@ -152,8 +156,8 @@ _backtest_metrikleri_hesapla() {
     local risksiz_yillik="${_BACKTEST_AYAR_RISKSIZ:-0.40}"
     local sharpe_sortino
     if [[ "$gun_sayisi" -gt 1 ]]; then
-        sharpe_sortino=$(printf '%s\n' "${_BACKTEST_GUNLUK_TOPLAM[@]}" | awk -v rf_yillik="$risksiz_yillik" '
-        BEGIN { rf_gunluk = rf_yillik / 252 }
+        sharpe_sortino=$(printf '%s\n' "${_BACKTEST_GUNLUK_TOPLAM[@]}" | awk -v rf_yillik="$risksiz_yillik" -v myil="$mumluk_yil" '
+        BEGIN { rf_gunluk = rf_yillik / myil }
         NR == 1 { onceki = $1; next }
         {
             getiri = ($1 - onceki) / onceki
@@ -172,8 +176,8 @@ _backtest_metrikleri_hesapla() {
                 neg_var = (neg_sumsq - neg_sum*neg_sum/neg_n) / (neg_n-1)
                 neg_std = (neg_var > 1e-12) ? sqrt(neg_var) : 0
             }
-            sharpe = (std > 1e-10) ? ort / std * sqrt(252) : 0
-            sortino = (neg_std > 1e-10) ? ort / neg_std * sqrt(252) : 0
+            sharpe = (std > 1e-10) ? ort / std * sqrt(myil) : 0
+            sortino = (neg_std > 1e-10) ? ort / neg_std * sqrt(myil) : 0
             printf "%.4f %.4f", sharpe, sortino
         }')
         _BACKTEST_SONUC[sharpe]=$(echo "$sharpe_sortino" | awk '{print $1}')

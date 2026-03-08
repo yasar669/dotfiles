@@ -31,10 +31,10 @@ class Interval(enum.Enum):
 
 
 class TvDatafeed:
-    __sign_in_url = 'https://www.tradingview.com/accounts/signin/'
-    __search_url = 'https://symbol-search.tradingview.com/symbol_search/?text={}&hl=1&exchange={}&lang=en&type=&domain=production'
+    __sign_in_url = "https://www.tradingview.com/accounts/signin/"
+    __search_url = "https://symbol-search.tradingview.com/symbol_search/?text={}&hl=1&exchange={}&lang=en&type=&domain=production"
     __ws_headers = json.dumps({"Origin": "https://data.tradingview.com"})
-    __signin_headers = {'Referer': 'https://www.tradingview.com'}
+    __signin_headers = {"Referer": "https://www.tradingview.com"}
     __ws_timeout = 5
 
     def __init__(
@@ -64,20 +64,18 @@ class TvDatafeed:
         self.chart_session = self.__generate_chart_session()
 
     def __auth(self, username, password):
-
-        if (username is None or password is None):
+        if username is None or password is None:
             token = None
 
         else:
-            data = {"username": username,
-                    "password": password,
-                    "remember": "on"}
+            data = {"username": username, "password": password, "remember": "on"}
             try:
                 response = requests.post(
-                    url=self.__sign_in_url, data=data, headers=self.__signin_headers)
-                token = response.json()['user']['auth_token']
-            except Exception as e:
-                logger.error('error while signin')
+                    url=self.__sign_in_url, data=data, headers=self.__signin_headers
+                )
+                token = response.json()["user"]["auth_token"]
+            except Exception:
+                logger.error("error while signin")
                 token = None
 
         return token
@@ -90,14 +88,18 @@ class TvDatafeed:
             except Exception:
                 pass
         self.ws = create_connection(
-            "wss://data.tradingview.com/socket.io/websocket", headers=self.__ws_headers, timeout=self.__ws_timeout
+            "wss://data.tradingview.com/socket.io/websocket",
+            headers=self.__ws_headers,
+            timeout=self.__ws_timeout,
         )
         # Kernel duzeyinde recv zaman asimi — SSL_read bloklansa bile keser
         if self.ws.sock:
             zaman_asimi_sn = self.__ws_timeout
-            timeval = struct.pack('ll', zaman_asimi_sn, 0)
+            timeval = struct.pack("ll", zaman_asimi_sn, 0)
             self.ws.sock.setsockopt(
-                socket.SOL_SOCKET, socket.SO_RCVTIMEO, timeval,
+                socket.SOL_SOCKET,
+                socket.SO_RCVTIMEO,
+                timeval,
             )
 
     @staticmethod
@@ -114,16 +116,14 @@ class TvDatafeed:
     def __generate_session():
         stringLength = 12
         letters = string.ascii_lowercase
-        random_string = "".join(random.choice(letters)
-                                for i in range(stringLength))
+        random_string = "".join(random.choice(letters) for i in range(stringLength))
         return "qs_" + random_string
 
     @staticmethod
     def __generate_chart_session():
         stringLength = 12
         letters = string.ascii_lowercase
-        random_string = "".join(random.choice(letters)
-                                for i in range(stringLength))
+        random_string = "".join(random.choice(letters) for i in range(stringLength))
         return "cs_" + random_string
 
     @staticmethod
@@ -158,7 +158,6 @@ class TvDatafeed:
                 row = [ts]
 
                 for i in range(5, 10):
-
                     # skip converting volume data if does not exists
                     if not volume_data and i == 9:
                         row.append(0.0)
@@ -169,13 +168,12 @@ class TvDatafeed:
                     except ValueError:
                         volume_data = False
                         row.append(0.0)
-                        logger.debug('no volume data')
+                        logger.debug("no volume data")
 
                 data.append(row)
 
             data = pd.DataFrame(
-                data, columns=["datetime", "open",
-                               "high", "low", "close", "volume"]
+                data, columns=["datetime", "open", "high", "low", "close", "volume"]
             ).set_index("datetime")
             data.insert(0, "symbol", value=symbol)
             return data
@@ -184,7 +182,6 @@ class TvDatafeed:
 
     @staticmethod
     def __format_symbol(symbol, exchange, contract: int = None):
-
         if ":" in symbol:
             pass
         elif contract is None:
@@ -266,8 +263,7 @@ class TvDatafeed:
         )
 
         self.__send_message(
-            "quote_add_symbols", [self.session, symbol,
-                                  {"flags": ["force_permission"]}]
+            "quote_add_symbols", [self.session, symbol, {"flags": ["force_permission"]}]
         )
         self.__send_message("quote_fast_symbols", [self.session, symbol])
 
@@ -287,8 +283,7 @@ class TvDatafeed:
             "create_series",
             [self.chart_session, "s1", "s1", "symbol_1", interval, n_bars],
         )
-        self.__send_message("switch_timezone", [
-                            self.chart_session, "exchange"])
+        self.__send_message("switch_timezone", [self.chart_session, "exchange"])
 
         raw_data = ""
 
@@ -314,19 +309,186 @@ class TvDatafeed:
 
         return self.__create_df(raw_data, symbol)
 
-    def search_symbol(self, text: str, exchange: str = ''):
+    def search_symbol(self, text: str, exchange: str = ""):
         url = self.__search_url.format(text, exchange)
 
         symbols_list = []
         try:
             resp = requests.get(url)
 
-            symbols_list = json.loads(resp.text.replace(
-                '</em>', '').replace('<em>', ''))
+            symbols_list = json.loads(
+                resp.text.replace("</em>", "").replace("<em>", "")
+            )
         except Exception as e:
             logger.error(e)
 
         return symbols_list
+
+    # =======================================================
+    # CANLI FIYAT STREAM FONKSIYONLARI
+    # =======================================================
+
+    @staticmethod
+    def __generate_quote_session():
+        stringLength = 12
+        letters = string.ascii_lowercase
+        random_string = "".join(random.choice(letters) for i in range(stringLength))
+        return "qs_" + random_string
+
+    def canli_oturum_olustur(self):
+        """Canli fiyat stream icin quote session olusturur.
+
+        Returns:
+            str: Olusturulan quote session ID'si.
+        """
+        self.quote_session = self.__generate_quote_session()
+        self.__create_connection()
+        self.__send_message("set_auth_token", [self.token])
+        self.__send_message("quote_create_session", [self.quote_session])
+        self.__send_message(
+            "quote_set_fields",
+            [
+                self.quote_session,
+                "lp",
+                "ch",
+                "chp",
+                "volume",
+                "open_price",
+                "high_price",
+                "low_price",
+                "prev_close_price",
+                "current_session",
+                "is_tradable",
+                "lp_time",
+                "ask",
+                "bid",
+            ],
+        )
+        return self.quote_session
+
+    def canli_sembol_ekle(self, semboller):
+        """Canli oturuma sembol ekler.
+
+        Args:
+            semboller: Tekil sembol (str) veya sembol listesi (list).
+                       "BIST:" oneki yoksa otomatik eklenir.
+        """
+        if isinstance(semboller, str):
+            semboller = [semboller]
+
+        for sembol in semboller:
+            if ":" not in sembol:
+                sembol = f"BIST:{sembol}"
+            self.__send_message(
+                "quote_add_symbols",
+                [self.quote_session, sembol, {"flags": ["force_permission"]}],
+            )
+            self.__send_message(
+                "quote_fast_symbols",
+                [self.quote_session, sembol],
+            )
+
+    def canli_sembol_cikar(self, semboller):
+        """Canli oturumdan sembol cikarir.
+
+        Args:
+            semboller: Tekil sembol (str) veya sembol listesi (list).
+        """
+        if isinstance(semboller, str):
+            semboller = [semboller]
+
+        for sembol in semboller:
+            if ":" not in sembol:
+                sembol = f"BIST:{sembol}"
+            self.__send_message(
+                "quote_remove_symbols",
+                [self.quote_session, sembol],
+            )
+
+    def canli_dinle(self, callback, timeout=None):
+        """Canli fiyat mesajlarini dinler ve callback ile iletir.
+
+        Her fiyat guncelleme mesajinda callback(sembol, veri) cagrilir.
+        veri dict formatinda: {"lp": ..., "ch": ..., "chp": ..., ...}
+
+        Args:
+            callback: Her fiyat guncellemesinde cagrilacak fonksiyon.
+                      Imza: callback(sembol: str, veri: dict)
+            timeout: Maks dinleme suresi (saniye). None ise surekli dinle.
+        """
+        if self.ws is None:
+            logger.error("WS baglantisi yok — once canli_oturum_olustur() cagirin")
+            return
+
+        baslangic = datetime.datetime.now()
+
+        while True:
+            try:
+                result = self.ws.recv()
+                if not result:
+                    continue
+
+                # Ping/pong isle
+                ping_match = re.match(r"~m~\d+~m~(\d+)$", result)
+                if ping_match:
+                    self.ws.send(self.__prepend_header(ping_match.group(1)))
+                    continue
+
+                # qsd mesajlarini ayikla
+                parcalar = re.split(r"~m~\d+~m~", result)
+                for parca in parcalar:
+                    parca = parca.strip()
+                    if not parca:
+                        continue
+                    try:
+                        mesaj = json.loads(parca)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    if not isinstance(mesaj, dict):
+                        continue
+                    if mesaj.get("m") != "qsd":
+                        continue
+
+                    p = mesaj.get("p", [])
+                    if len(p) < 2:
+                        continue
+
+                    veri_sarmal = p[1]
+                    tam_sembol = veri_sarmal.get("n", "")
+                    degerler = veri_sarmal.get("v", {})
+
+                    if not tam_sembol or not degerler:
+                        continue
+
+                    # "BIST:THYAO" -> "THYAO"
+                    sembol = (
+                        tam_sembol.split(":")[-1] if ":" in tam_sembol else tam_sembol
+                    )
+
+                    callback(sembol, degerler)
+
+            except Exception as e:
+                if "timed out" in str(e):
+                    pass
+                else:
+                    logger.error("Canli dinleme hatasi: %s", e)
+                    break
+
+            # Zaman asimi kontrolu
+            if timeout is not None:
+                gecen = (datetime.datetime.now() - baslangic).total_seconds()
+                if gecen >= timeout:
+                    break
+
+    def canli_kapat(self):
+        """Canli oturumu ve WS baglantisini kapatir."""
+        if self.ws is not None:
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+            self.ws = None
 
 
 if __name__ == "__main__":

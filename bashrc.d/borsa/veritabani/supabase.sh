@@ -239,7 +239,99 @@ _vt_yedege_yaz() {
 }
 
 # =======================================================
-# BOLUM 2: YAZMA FONKSIYONLARI
+# BOLUM 2: AYAR YONETIMI
+# =======================================================
+
+# -------------------------------------------------------
+# vt_ayar_kaydet <anahtar> <deger> [aciklama]
+# Anahtar-deger ciftini ayarlar tablosuna yazar.
+# Varsa gunceller (upsert), yoksa ekler.
+# -------------------------------------------------------
+vt_ayar_kaydet() {
+    local anahtar="$1"
+    local deger="$2"
+    local aciklama="${3:-}"
+
+    if [[ -z "$anahtar" ]] || [[ -z "$deger" ]]; then
+        return 1
+    fi
+
+    _vt_otomatik_baslat
+
+    local json
+    json=$(_vt_json_olustur \
+        "anahtar" "$anahtar" \
+        "deger" "$deger" \
+        "aciklama" "$aciklama")
+
+    # Upsert: varsa guncelle, yoksa ekle
+    vt_istek_at "POST" "ayarlar" "$json" \
+        "Prefer: resolution=merge-duplicates" || {
+        _cekirdek_log "UYARI: Ayar kaydedilemedi — $anahtar"
+        return 1
+    }
+
+    return 0
+}
+
+# -------------------------------------------------------
+# vt_ayar_oku <anahtar>
+# Ayarlar tablosundan degeri okur.
+# stdout: deger (bos ise hicbir sey yazmaz)
+# Donus: 0 = bulundu, 1 = bulunamadi
+# -------------------------------------------------------
+vt_ayar_oku() {
+    local anahtar="$1"
+
+    if [[ -z "$anahtar" ]]; then
+        return 1
+    fi
+
+    _vt_otomatik_baslat
+
+    local yanit
+    yanit=$(vt_istek_at "GET" "ayarlar?anahtar=eq.${anahtar}&select=deger" "" \
+        "Accept: application/json") || return 1
+
+    # JSON dizisinden degeri cikar: [{"deger":"xxx"}]
+    local deger=""
+    if command -v jq > /dev/null 2>&1; then
+        deger=$(echo "$yanit" | jq -r '.[0].deger // empty' 2>/dev/null)
+    else
+        deger=$(echo "$yanit" | grep -oP '"deger"\s*:\s*"\K[^"]+' 2>/dev/null | head -1)
+    fi
+
+    if [[ -n "$deger" ]]; then
+        echo "$deger"
+        return 0
+    fi
+
+    return 1
+}
+
+# -------------------------------------------------------
+# vt_ayar_sil <anahtar>
+# Ayarlar tablosundan bir kaydi siler.
+# -------------------------------------------------------
+vt_ayar_sil() {
+    local anahtar="$1"
+
+    if [[ -z "$anahtar" ]]; then
+        return 1
+    fi
+
+    _vt_otomatik_baslat
+
+    vt_istek_at "DELETE" "ayarlar?anahtar=eq.${anahtar}" || {
+        _cekirdek_log "UYARI: Ayar silinemedi — $anahtar"
+        return 1
+    }
+
+    return 0
+}
+
+# =======================================================
+# BOLUM 3: YAZMA FONKSIYONLARI
 # =======================================================
 
 # -------------------------------------------------------

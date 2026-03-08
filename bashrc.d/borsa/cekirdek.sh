@@ -51,10 +51,10 @@ if [[ -f "${BORSA_KLASORU}/veritabani/supabase.sh" ]]; then
     source "${BORSA_KLASORU}/veritabani/supabase.sh"
 fi
 
-# Tarama katmanini yukle (fiyat kaynagi yonetimi)
-if [[ -f "${BORSA_KLASORU}/tarama/fiyat_kaynagi.sh" ]]; then
+# Tarama katmanini yukle (canli veri yonetimi — tvDatafeed)
+if [[ -f "${BORSA_KLASORU}/tarama/canli_veri.sh" ]]; then
     # shellcheck source=/dev/null
-    source "${BORSA_KLASORU}/tarama/fiyat_kaynagi.sh"
+    source "${BORSA_KLASORU}/tarama/canli_veri.sh"
 fi
 
 # Tarama katmani — sembol tarayici (endeks, dosya, portfoy kaynagi)
@@ -1758,21 +1758,18 @@ borsa() {
         return 0
     fi
 
-    # Ozel komut: borsa veri — Veri kaynagi yonetimi
+    # Ozel komut: borsa veri — Canli veri yonetimi (tvDatafeed)
     if [[ "$kurum" == "veri" ]]; then
         local vr_komut="$komut"
         case "$vr_komut" in
             baslat)
-                fiyat_kaynagi_baslat "$@"
+                canli_veri_baslat "$@"
                 ;;
             durdur)
-                fiyat_kaynagi_durdur
+                canli_veri_durdur
                 ;;
-            goster|durum)
-                fiyat_kaynagi_goster
-                ;;
-            ayarla)
-                fiyat_kaynagi_ayarla "$@"
+            durum|goster)
+                canli_veri_durum
                 ;;
             fiyat)
                 local sembol="$1"
@@ -1780,16 +1777,51 @@ borsa() {
                     echo "Kullanim: borsa veri fiyat <SEMBOL>"
                     return 1
                 fi
-                fiyat_kaynagi_fiyat_al "$sembol"
+                canli_fiyat_al "$sembol"
+                ;;
+            ekle)
+                local sembol="$1"
+                if [[ -z "$sembol" ]]; then
+                    echo "Kullanim: borsa veri ekle <SEMBOL>"
+                    return 1
+                fi
+                canli_veri_sembol_ekle "$sembol"
+                ;;
+            cikar)
+                local sembol="$1"
+                if [[ -z "$sembol" ]]; then
+                    echo "Kullanim: borsa veri cikar <SEMBOL>"
+                    return 1
+                fi
+                canli_veri_sembol_cikar "$sembol"
+                ;;
+            giris)
+                local kullanici="$1"
+                local sifre="$2"
+                if [[ -z "$kullanici" ]] || [[ -z "$sifre" ]]; then
+                    echo "Kullanim: borsa veri giris <tv_kullanici_adi> <tv_sifre>"
+                    echo ""
+                    echo "TradingView hesap bilgilerinizi kaydeder."
+                    echo "Gercek zamanli veri icin gereklidir (opsiyonel)."
+                    echo "Bilgiler veritabaninda saklanir."
+                    return 1
+                fi
+                canli_veri_giris "$kullanici" "$sifre"
+                ;;
+            cikis)
+                canli_veri_cikis
                 ;;
             "")
                 echo "Kullanim: borsa veri <komut>"
                 echo "Komutlar:"
-                echo "  baslat               - Veri kaynagini otomatik sec ve baslat"
-                echo "  durdur               - Veri kaynagini durdur"
-                echo "  goster               - Aktif kaynagi ve yedekleri goster"
-                echo "  ayarla <kurum> <hesap>- Manuel kaynak sec"
-                echo "  fiyat <SEMBOL>       - Sembol fiyati sorgula"
+                echo "  giris <kullanici> <sifre> - TradingView hesap bilgilerini kaydet"
+                echo "  cikis                    - TradingView hesap bilgilerini sil"
+                echo "  baslat                   - tvDatafeed daemon'u baslat"
+                echo "  durdur                   - Daemon'u durdur"
+                echo "  durum                    - Daemon durumunu goster"
+                echo "  fiyat <SEMBOL>           - Sembol fiyati sorgula"
+                echo "  ekle <SEMBOL>            - Canli takibe sembol ekle"
+                echo "  cikar <SEMBOL>           - Canli takipten sembol cikar"
                 ;;
             *)
                 echo "HATA: Bilinmeyen veri komutu: '$vr_komut'"
@@ -2088,15 +2120,8 @@ borsa() {
                 echo "Kullanim: borsa $kurum fiyat <SEMBOL>"
                 return 1
             fi
-            # Adaptor varsa dogrudan adaptor ile sorgula
-            if declare -f adaptor_hisse_bilgi_al > /dev/null; then
-                adaptor_hisse_bilgi_al "$sembol"
-            elif declare -f fiyat_kaynagi_fiyat_al > /dev/null; then
-                fiyat_kaynagi_fiyat_al "$sembol"
-            else
-                echo "HATA: Fiyat sorgulama desteklenmiyor."
-                return 1
-            fi
+            # tvDatafeed canli veri daemon uzerinden fiyat al
+            canli_fiyat_al "$sembol"
             ;;
         "")
             echo "Kullanim: borsa $kurum <komut>"

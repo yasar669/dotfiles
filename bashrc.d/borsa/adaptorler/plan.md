@@ -143,7 +143,6 @@ Cekirdek `declare -f` ile varligini kontrol eder. Yoksa ya varsayilan davranis u
 | `adaptor_cikis`              | Yalnizca yerel temizlik yapilir           | LogOff istegi                |
 | `adaptor_hesap`              | `cekirdek_hesap` kullanilir               | Hesap gecis                  |
 | `adaptor_hesaplar`           | `cekirdek_hesaplar` kullanilir            | Kayitli oturumlar            |
-| `adaptor_hisse_bilgi_al`     | Fiyat kaynagindan sorgulanir              | Sembol fiyat sorgulama       |
 
 ### 4.3 Fonksiyon Imzalari ve Cikti Sozlesmesi
 
@@ -230,7 +229,7 @@ Yeni komut eklemek icin **hem bu tabloya hem de cekirdekteki case bloguna** ekle
 | `borsa X arz guncelle ...` | `adaptor_halka_arz_guncelle` | VT halka arz kaydi (robot modunda)      |
 | `borsa X hesap [no]`       | `adaptor_hesap` / `cekirdek_hesap`     | —                              |
 | `borsa X hesaplar`         | `adaptor_hesaplar` / `cekirdek_hesaplar`| —                             |
-| `borsa X fiyat SEMBOL`     | `adaptor_hisse_bilgi_al`     | Yoksa fiyat kaynagi kullanilir          |
+| `borsa X fiyat SEMBOL`     | `canli_fiyat_al`             | tvDatafeed daemon uzerinden fiyat sorgu  |
 | `borsa X cikis HESAP`      | `adaptor_cikis`              | Koruma durdurma + VT log                |
 
 ### 5.3 Otomatik Kurum Kesfi

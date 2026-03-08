@@ -141,8 +141,13 @@ CREATE TABLE IF NOT EXISTS backtest_sonuclari (
     komisyon_alis       NUMERIC(8,6),
     komisyon_satis      NUMERIC(8,6),
     parametreler        JSONB,
+    periyot             VARCHAR(4)      DEFAULT '1G',
     zaman               TIMESTAMPTZ     DEFAULT NOW()
 );
+
+-- Mevcut tabloya periyot sutunu ekle (varsa atla)
+ALTER TABLE backtest_sonuclari
+    ADD COLUMN IF NOT EXISTS periyot VARCHAR(4) DEFAULT '1G';
 
 -- =========================================================
 -- 9. backtest_islemleri
@@ -213,6 +218,18 @@ CREATE INDEX IF NOT EXISTS idx_ohlcv_sembol_periyot
 
 CREATE INDEX IF NOT EXISTS idx_ohlcv_tarih
     ON ohlcv (tarih DESC);
+
+-- =========================================================
+-- 12. ayarlar
+-- Anahtar-deger tabanlı sistem ayarlari.
+-- TradingView giris bilgileri, genel tercihler vb.
+-- =========================================================
+CREATE TABLE IF NOT EXISTS ayarlar (
+    anahtar             TEXT            PRIMARY KEY,
+    deger               TEXT            NOT NULL,
+    aciklama            TEXT,
+    guncelleme          TIMESTAMPTZ     DEFAULT NOW()
+);
 
 -- INDEKSLER (diger tablolar)
 
@@ -336,6 +353,13 @@ ALTER TABLE ohlcv ENABLE ROW LEVEL SECURITY;
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'ohlcv' AND policyname = 'anon_tam_erisim') THEN
         CREATE POLICY anon_tam_erisim ON ohlcv FOR ALL TO anon USING (true) WITH CHECK (true);
+    END IF;
+END $$;
+
+ALTER TABLE ayarlar ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'ayarlar' AND policyname = 'anon_tam_erisim') THEN
+        CREATE POLICY anon_tam_erisim ON ayarlar FOR ALL TO anon USING (true) WITH CHECK (true);
     END IF;
 END $$;
 

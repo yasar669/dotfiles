@@ -21,6 +21,7 @@ _backtest_veri_yukle() {
     local bas_tarih="$2"
     local bit_tarih="$3"
     local kaynak="${4:-supabase}"
+    local periyot="${5:-1G}"
 
     # Dizileri sifirla
     _BACKTEST_VERI_TARIH=()
@@ -33,12 +34,17 @@ _backtest_veri_yukle() {
 
     case "$kaynak" in
         supabase)
-            _backtest_supabase_oku "$sembol" "$bas_tarih" "$bit_tarih"
+            _backtest_supabase_oku "$sembol" "$bas_tarih" "$bit_tarih" "$periyot"
             ;;
         csv)
             _backtest_csv_oku "${_BACKTEST_AYAR_CSV_DOSYA:-}" "$sembol"
             ;;
         sentetik)
+            # Sentetik veri sadece gunluk (1G) periyot destekler
+            if [[ "$periyot" != "1G" ]] && [[ -n "$periyot" ]]; then
+                echo "HATA: Sentetik veri sadece 1G (gunluk) periyot destekler. Secilen: $periyot" >&2
+                return 1
+            fi
             # Tarih araligina gore gun sayisini hesapla
             local _st_gun=250
             if [[ -n "$bas_tarih" ]] && [[ -n "$bit_tarih" ]]; then
