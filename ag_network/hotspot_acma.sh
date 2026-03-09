@@ -80,8 +80,30 @@ hotspot_ac() {
 
     #iptables = Linux un güvenli duvarıdır. her gelen ve giden ağ oaketine ne yapılacağına karar verir. 
     #bunu evin kapısı önündeki bir güvenlik görevlisi gibi düşünebilirsin.her pakete sorar: kim gönderdi?,Nereye gidecek?,geçirebilir miyim?
-    #
+    # iptales ten sonra gelen commanslar.:
+    #-A (--append) sona ekle anlamına gelmektedir. en çok bunu kullanırsın bu kuralı listenin sonuna yaz demektir.
+    #-I(--insert) araya sıkıştır anlamına gelmektedir. eğer kuralı listenin sonua değişde en başa koymak istersen kullanırsın çünkü ıptables kuralları yukarıdan aşağı sırayla okur.
+    #-D(--delete) sil anşamınagelmektedir. yazdığın bir kuralı iptal etmek listeden çıkarmak için kullanılır.
+    #-L(--list) göster anlamına gelmektedir. şu an hangi kuralar var bana listesini dök anlamına gelmektedir.
+    #-F(--flush) ne kadar kural varsa heğsini tek seferde sil, sıfırla
+    
 
+    #FİLTRELER
+    #-p komutu '--protocol'  anlamına gelmektedir. hangi dille konulanı yakalayayım demek olur.
+    #genelde tcp (web,ssh) udp(oyun,dns) ve ya icmp(ping) yazılır. örn sadece web trafiğini engellemek istiyorsan -p ycp dersin.
+    #-S(source) kimden geleni yakalayayım demektir.kaynak ıp adresidir. "eğer paket 192.168.1.5"ten geliyorsa demek için -s kullanılır
+    #-d (--destination) kime gideniyakalayayım sorunusunun cavabıdır. hedef ıp adresidir."eğer paket goggle a 8.8.8.8 gidiyorsa " demek için -d kullanılır.
+    #-i(--in-interface) hangi kapıdan gireni yakalayayım sorunusunun cevabıdır. senin bilgisayarında hem wi-fi(wlan0)hem kablo(eth0) var diyelim sadece wi-fi dan gelenleri filtrelemek için -i wlan0 yazarsın.
+    #-o(--out-interface) hangi kağıdan çıkanı yakalayayım sorunusunun cevabıdır. sadece kablo üzerinden dışarı ıkan trafiği kontrol etmek için -o eth0 yazarsın.
+    #--dport(help menusunde açıkça yazmaz ama -p tcp dedikten sonra açılır) hedef port demektir. mesela --dport 22 dersen bana ssh yapmaya çalışanlar demek olur.
+    
+    #HEDEF "BUNLARI YAKALADIM NE YAPAYIM?"
+    #-j(--jump) kuralımızın siilesidir,hükmüdür. şartlar sağlandıysa emri verir. yardımcı kelimesi targettir. en çok şunlar kullanılır:
+    #-j ACCEPT (serbest bırak)
+    #-j DROP (açma,ypk et )
+    #-j REJECT (geri çevir)
+    #-j MASQUERADE (maske takıp yönlendir)
+    
     sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 
     sudo iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
