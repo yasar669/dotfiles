@@ -50,16 +50,37 @@ hotspot_ac() {
    #ama eğer saldırgan /proc/kallmsyms dosyasını okuyabilirse artık tam adresi bilir ve kaslr koruması ise yaramaz hale gelir.
    #sysctl -w kernel.kptr_restrict=2 bu adreslerin kimler tarafndan görülebileceğini kontorl eder. 0 tamemen açık 1 sadce root görebilir 2 ise tamamen gili şekilde ayarlar verir.
    #sysctl -w kernel.dmesg_restrict=1 >> dmesg çekirdeğin log mesajlarını gösteren komuttur. bilgisayar açıldığından beri çekirdeğin yazdığı tüm mesajları içerir. >> dmesg | head -10
-   #bu mesajlarda neler var :[    0.000000] Linux version 6.x.x (Cekirdek surumu)
-   #[    1.232817] r8169: eth0 MAC adresi: 74:d4:dd:22:65:43
-   #[    3.843722] iwlwifi: Wi-Fi karti tanimlandi
-   #[    3.922074] Bluetooth: Firmware yuklendi
-   #[   15.004521] USB: Yeni aygit baglandi
+   #bu mesajlarda neler var :[0.000000] Linux version 6.x.x (Cekirdek surumu)
+   #[1.232817] r8169: eth0 MAC adresi: 74:d4:dd:22:65:43
+   #[3.843722] iwlwifi: Wi-Fi karti tanimlandi
+   #[3.922074] Bluetooth: Firmware yuklendi
+   #[15.004521] USB: Yeni aygit baglandi
    #bu komut =1 yapılmalıdır ki sadece root kullanıcları çekirdek loglarını görebilsin.
-   
+   #sysctl -w kernel.yama.ptrace_scope=2 >> ptrace Process Trace (sürec takibi) bir ptogramın başka bir programın içeriğini okuması ve değiştirmesi için kullanılan bir sistem çağrısıdır normalde ahta ayıklama için kullanılır.
+   #0	Tamamen acik	Herkes herkesi izleyebilir (tehlikeli)
+   #1	Kisitli (varsayilan)	Sadece ust surec alt surecini izleyebilir
+   #2	Sadece root	Yalnizca root ptrace kullanabilir
+   #3	Tamamen kapali	Hic kimse ptrace kullanamaz, root bile
 
+   # KALICILIK İÇİN YAPILMASI GEEKENLER 
+
+   #ayarları /etc/sysctl.d/ dizinine .conf uzantılı vir dosya olarak yazmak gerekiyor bu dizindeki tüm .conf dosyaları her açılışta otomatik okunur ve uygulanır.
+   #sudo tee /etc/sysctl.d/99-guvenlik.conf <<E0F
+   #ayar1=deger1
+   #ayar2=deger2
+   #EOF
+   #sudo sysctl -p /etc/sysctl.d/99-guvenlik.conf
+
+   #/etc/sysctl.d/ dizini linux un acılış sırasında otomatik okuduğu bir dizindir.
+   #dosya adı 99- ile basşlıyor çünkü dosyalar numara sırasına göre okunur.
+   # sudo tee kullanılıyor çünkü /etc/ dizinine yazmak root yetkisi gerektirir ve sudo > çalışmadığı için tee şart
+   #sysctl -p dosyadaki ayarları o an uygular yoksa sonraki açılışı beklemek gerekirdi 
 
     sudo sysctl -w net.ipv4.ip_forward=1
+
+    #iptables = Linux un güvenli duvarıdır. her gelen ve giden ağ oaketine ne yapılacağına karar verir. 
+    #bunu evin kapısı önündeki bir güvenlik görevlisi gibi düşünebilirsin.her pakete sorar: kim gönderdi?,Nereye gidecek?,geçirebilir miyim?
+    #
 
     sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 

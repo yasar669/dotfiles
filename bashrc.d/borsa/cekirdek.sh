@@ -7,7 +7,7 @@
 # Ornek:    borsa ziraat giris 123456 sifrem
 # Ornek:    borsa ziraat bakiye
 
-BORSA_KLASORU="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BORSA_KLASORU="${BASH_SOURCE[0]%/*}"
 
 # BIST kurallar modulunu yukle (fiyat adimi, seans saatleri, limitler)
 # shellcheck source=/home/yasar/dotfiles/bashrc.d/borsa/kurallar/bist.sh
@@ -115,7 +115,7 @@ cekirdek_son_istek_guncelle() {
     local kurum="$1"
     local hesap="$2"
     local simdi
-    simdi=$(date +%s)
+    printf -v simdi '%(%s)T' -1
 
     _CEKIRDEK_OTURUM_SON_ISTEK["${kurum}:${hesap}"]="$simdi"
     local dizin
@@ -143,16 +143,16 @@ cekirdek_oturum_kalan() {
         [[ -z "$dizin" ]] && echo "0" && return 1
 
         [[ -z "$sure" ]] && [[ -f "${dizin}/oturum_suresi" ]] && \
-            sure=$(cat "${dizin}/oturum_suresi" 2>/dev/null)
+            sure=$(<"${dizin}/oturum_suresi")
         [[ -z "$son_istek" ]] && [[ -f "${dizin}/son_istek" ]] && \
-            son_istek=$(cat "${dizin}/son_istek" 2>/dev/null)
+            son_istek=$(<"${dizin}/son_istek")
     fi
 
     [[ -z "$sure" ]] && echo "0" && return 1
     [[ -z "$son_istek" ]] && echo "$sure" && return 0
 
     local simdi
-    simdi=$(date +%s)
+    printf -v simdi '%(%s)T' -1
     local gecen=$(( simdi - son_istek ))
     local kalan=$(( sure - gecen ))
     echo "$kalan"
@@ -235,7 +235,7 @@ cekirdek_oturum_koruma_baslat() {
 
     # Diskten okumaya calis
     if [[ -z "$sure" ]] && [[ -f "${dizin}/oturum_suresi" ]]; then
-        sure=$(cat "${dizin}/oturum_suresi" 2>/dev/null)
+        sure=$(<"${dizin}/oturum_suresi")
     fi
 
     # Varsayilan sure: 25 dakika (1500 saniye)
@@ -328,7 +328,7 @@ cekirdek_oturum_koruma_durdur() {
     # Sahip kontrolu
     if [[ -n "$sahip_filtre" ]] && [[ -f "$sahip_dosyasi" ]]; then
         local mevcut_sahip
-        mevcut_sahip=$(cat "$sahip_dosyasi" 2>/dev/null)
+        mevcut_sahip=$(<"$sahip_dosyasi") || mevcut_sahip=""
         if [[ "$mevcut_sahip" != "$sahip_filtre" ]]; then
             _cekirdek_log "Oturum koruma durdurma: sahip uyumsuz (mevcut: $mevcut_sahip, filtre: $sahip_filtre)."
             return 0
@@ -336,7 +336,7 @@ cekirdek_oturum_koruma_durdur() {
     fi
 
     local pid
-    pid=$(cat "$pid_dosyasi" 2>/dev/null)
+    pid=$(<"$pid_dosyasi") || pid=""
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         kill "$pid" 2>/dev/null
         _cekirdek_log "Oturum koruma durduruldu: PID $pid ($kurum/$hesap)."
@@ -362,7 +362,7 @@ cekirdek_oturum_koruma_aktif_mi() {
     [[ ! -f "$pid_dosyasi" ]] && return 1
 
     local pid
-    pid=$(cat "$pid_dosyasi" 2>/dev/null)
+    pid=$(<"$pid_dosyasi") || pid=""
     [[ -z "$pid" ]] && return 1
 
     if kill -0 "$pid" 2>/dev/null; then
@@ -396,9 +396,10 @@ _cekirdek_aktif_hesaplari_yukle() {
         [[ ! -d "$kurum_dizini" ]] && continue
         hesap_dosyasi="${kurum_dizini}${_CEKIRDEK_DOSYA_AKTIF_HESAP}"
         [[ ! -f "$hesap_dosyasi" ]] && continue
-        hesap=$(cat "$hesap_dosyasi" 2>/dev/null)
+        hesap=$(<"$hesap_dosyasi") || hesap=""
         [[ -z "$hesap" ]] && continue
-        kurum=$(basename "$kurum_dizini")
+        kurum="${kurum_dizini%/}"
+        kurum="${kurum##*/}"
         _CEKIRDEK_AKTIF_HESAPLAR["$kurum"]="$hesap"
     done
 }
@@ -501,8 +502,8 @@ cekirdek_kurumlari_listele() {
     local surucu ad
     for surucu in "$BORSA_KLASORU/adaptorler"/*.sh; do
         [[ ! -f "$surucu" ]] && continue
-        ad=$(basename "$surucu" .sh)
-        [[ "$ad" == *.ayarlar ]] && continue
+        ad="${surucu##*/}"
+        ad="${ad%.sh}"
         echo "$ad"
     done
 }
@@ -639,7 +640,8 @@ cekirdek_hesaplar() {
     local sayac=0
     while IFS= read -r dizin; do
         local no
-        no=$(basename "$dizin")
+        no="${dizin%/}"
+        no="${no##*/}"
         local durum="GECERSIZ"
         local isaret="  "
 
@@ -720,7 +722,7 @@ cekirdek_yazdir_portfoy() {
     local hisse="$3"
     local toplam="$4"
     local kurum_buyuk
-    kurum_buyuk=$(echo "$kurum" | tr '[:lower:]' '[:upper:]')
+    kurum_buyuk="${kurum^^}"
 
     echo ""
     echo "========================================="
@@ -745,7 +747,7 @@ cekirdek_yazdir_portfoy_detay() {
     local toplam="$4"
     local satirlar="$5"
     local kurum_buyuk
-    kurum_buyuk=$(echo "$kurum" | tr '[:lower:]' '[:upper:]')
+    kurum_buyuk="${kurum^^}"
 
     echo ""
     echo "========================================================================="
@@ -822,7 +824,7 @@ cekirdek_yazdir_halka_arz_liste() {
     local limit="$2"
     local satirlar="$3"
     local kurum_buyuk
-    kurum_buyuk=$(echo "$kurum" | tr '[:lower:]' '[:upper:]')
+    kurum_buyuk="${kurum^^}"
 
     echo ""
     echo "========================================================================="
@@ -868,7 +870,7 @@ cekirdek_yazdir_halka_arz_talepler() {
     local kurum="$1"
     local satirlar="$2"
     local kurum_buyuk
-    kurum_buyuk=$(echo "$kurum" | tr '[:lower:]' '[:upper:]')
+    kurum_buyuk="${kurum^^}"
 
     echo ""
     echo "========================================================================="
@@ -1091,7 +1093,7 @@ cekirdek_oturum_yonlendirme_kontrol() {
     local kalip="$2"
     local kurum="$3"
 
-    if echo "$yanit" | grep -q "$kalip"; then
+    if [[ "$yanit" == *"$kalip"* ]]; then
         cekirdek_adaptor_log "$kurum" "HATA: Oturum sonlanmis. Giris yapin."
         echo "HATA: Oturum sonlanmis. Once giris yapin: borsa $kurum giris"
         return 1
@@ -1109,7 +1111,7 @@ cekirdek_csrf_cikar() {
     local kurum="$4"
 
     local token
-    token=$(echo "$html" | grep -oP "$selektor" | tail -n 1)
+    token=$(grep -oP "$selektor" <<< "$html" | tail -n 1)
 
     if [[ -z "$token" ]]; then
         cekirdek_adaptor_log "$kurum" "HATA: CSRF token bulunamadi ($baglam)."
@@ -1141,10 +1143,10 @@ cekirdek_json_sonuc_isle() {
     local ek_basari_kalip="${2:-}"
 
     local mesaj
-    mesaj=$(echo "$yanit" | grep -oP '"[Mm]essage"\s*:\s*"\K[^"]+' | head -1)
+    mesaj=$(grep -oP '"[Mm]essage"\s*:\s*"\K[^"]+' <<< "$yanit" | head -1)
 
     # Basari: IsSuccess=true
-    if echo "$yanit" | grep -qiE '"[Ii]s[Ss]uccess"\s*:\s*true'; then
+    if [[ "${yanit,,}" =~ \"issuccess\"[[:space:]]*:[[:space:]]*true ]]; then
         echo "${mesaj:-}"
         return 0
     fi
@@ -1152,7 +1154,7 @@ cekirdek_json_sonuc_isle() {
     # Ek basari kalıbı (Data alaninda ozel deger, orn: "SILMEOK")
     if [[ -n "$ek_basari_kalip" ]]; then
         local veri_alani
-        veri_alani=$(echo "$yanit" | grep -oP '"Data"\s*:\s*"\K[^"]+' | head -1)
+        veri_alani=$(grep -oP '"Data"\s*:\s*"\K[^"]+' <<< "$yanit" | head -1)
         if [[ "$veri_alani" == "$ek_basari_kalip" ]]; then
             echo "${mesaj:-}"
             return 0
@@ -1160,7 +1162,7 @@ cekirdek_json_sonuc_isle() {
     fi
 
     # Hata: IsError=true
-    if echo "$yanit" | grep -qiE '"[Ii]s[Ee]rror"\s*:\s*true'; then
+    if [[ "${yanit,,}" =~ \"iserror\"[[:space:]]*:[[:space:]]*true ]]; then
         echo "${mesaj:-Islem basarisiz}"
         return 1
     fi
@@ -1265,7 +1267,7 @@ cekirdek_saglik_kontrol() {
     local nokta eksik_sayisi
     eksik_sayisi=0
     for nokta in "${isaret_noktalari[@]}"; do
-        if ! echo "$sayfa_icerik" | grep -q "$nokta"; then
+        if [[ "$sayfa_icerik" != *"$nokta"* ]]; then
             _cekirdek_log "SAGLIK [$kurum] K3-ISARETCI: '$nokta' sayfada bulunamadi."
             eksik_sayisi=$((eksik_sayisi + 1))
         fi
@@ -1280,24 +1282,20 @@ cekirdek_saglik_kontrol() {
     cekirdek_sayi_dogrula "$toplam" "Toplam" "$kurum" || hata_sayisi=$((hata_sayisi + 1))
 
     # --- Katman 5: Matematik Tutarlilik (nakit + hisse ~ toplam) ---
-    # Sayilardaki virgulleri kaldir, bc ile hesapla
     if [[ -n "$nakit" ]] && [[ -n "$hisse" ]] && [[ -n "$toplam" ]]; then
-        local nakit_temiz hisse_temiz toplam_temiz hesaplanan fark fark_abs esik
-        nakit_temiz="${nakit//,/}"
-        hisse_temiz="${hisse//,/}"
-        toplam_temiz="${toplam//,/}"
-        hesaplanan=$(echo "$nakit_temiz + $hisse_temiz" | bc 2>/dev/null)
-        if [[ -n "$hesaplanan" ]]; then
-            # Fark mutlak degeri %1'den buyukse uyar
-            esik=$(echo "scale=2; $toplam_temiz * 0.01" | bc 2>/dev/null)
-            fark=$(echo "$hesaplanan - $toplam_temiz" | bc 2>/dev/null)
-            fark_abs=$(echo "if ($fark < 0) -1*$fark else $fark" | bc 2>/dev/null)
-            if [[ -n "$fark_abs" ]] && [[ -n "$esik" ]]; then
-                if (( $(echo "$fark_abs > $esik" | bc -l 2>/dev/null) )); then
-                    _cekirdek_log "SAGLIK [$kurum] K5-MATEMATIK: nakit+hisse=$hesaplanan, toplam=$toplam_temiz. Tutarsizlik tespit edildi."
-                    hata_sayisi=$((hata_sayisi + 1))
-                fi
-            fi
+        local nakit_temiz="${nakit//,/}"
+        local hisse_temiz="${hisse//,/}"
+        local toplam_temiz="${toplam//,/}"
+        
+        if ! awk -v n="$nakit_temiz" -v h="$hisse_temiz" -v t="$toplam_temiz" \
+           'BEGIN {
+               toplanan = n + h
+               fark = (toplanan > t) ? toplanan - t : t - toplanan
+               esik = t * 0.01
+               exit (fark > esik) ? 1 : 0
+           }' 2>/dev/null; then
+            _cekirdek_log "SAGLIK [$kurum] K5-MATEMATIK: nakit+hisse=$((nakit_temiz + hisse_temiz)), toplam=$toplam_temiz. Tutarsizlik tespit edildi."
+            hata_sayisi=$((hata_sayisi + 1))
         fi
     fi
 
@@ -1330,16 +1328,16 @@ tum_bakiyeler() {
     local kurum_klasoru
     for kurum_klasoru in /tmp/borsa/*/; do
         [[ -d "$kurum_klasoru" ]] || continue
-        local kurum_adi
-        kurum_adi=$(basename "$kurum_klasoru")
+        local kurum_adi="${kurum_klasoru%/}"
+        kurum_adi="${kurum_adi##*/}"
         [[ "$kurum_adi" == "_vt_yedek" ]] && continue
         [[ "$kurum_adi" == "_veri_durum" ]] && continue
 
         local hesap_klasoru
         for hesap_klasoru in "${kurum_klasoru}"*/; do
             [[ -d "$hesap_klasoru" ]] || continue
-            local hesap_no
-            hesap_no=$(basename "$hesap_klasoru")
+            local hesap_no="${hesap_klasoru%/}"
+            hesap_no="${hesap_no##*/}"
 
             # Oturum acik mi kontrol et
             [[ -f "${hesap_klasoru}${_CEKIRDEK_DOSYA_COOKIE}" ]] || continue
@@ -1354,18 +1352,23 @@ tum_bakiyeler() {
             local bakiye_ciktisi
             bakiye_ciktisi=$(adaptor_bakiye "$hesap_no" 2>/dev/null) || continue
 
-            # Basit ayristirma: nakit ve toplam satirlari ara
+            # Basit ayristirma ve ondalikli hesaplamalar
             local nakit hisse toplam
-            nakit=$(echo "$bakiye_ciktisi" | grep -i "nakit\|TL" | head -1 | grep -oP '[\d,.]+' | tail -1 | tr -d '.' | tr ',' '.' || echo "0")
-            toplam=$(echo "$bakiye_ciktisi" | grep -i "toplam\|Genel" | head -1 | grep -oP '[\d,.]+' | tail -1 | tr -d '.' | tr ',' '.' || echo "0")
-            hisse=$(echo "$toplam - $nakit" | bc 2>/dev/null || echo "0")
+            read -r nakit toplam < <(awk -F: '
+                /[Nn]akit|TL/ {gsub(/[^0-9,.]/, "", $2); gsub(/\./, "", $2); gsub(/,/, ".", $2); n=$2}
+                /[Tt]oplam|[Gg]enel/ {gsub(/[^0-9,.]/, "", $2); gsub(/\./, "", $2); gsub(/,/, ".", $2); t=$2}
+                END {print n?n:0, t?t:0}
+            ' <<< "$bakiye_ciktisi")
+            
+            read -r hisse toplam_nakit toplam_hisse toplam_genel < <(awk -v t="$toplam" -v n="$nakit" -v tn="$toplam_nakit" -v th="$toplam_hisse" -v tg="$toplam_genel" '
+                BEGIN {
+                    h = t - n
+                    printf "%.2f %.2f %.2f %.2f\n", h, tn+n, th+h, tg+t
+                }
+            ')
 
             printf "%-12s %-10s %15s %15s %15s\n" \
                 "$kurum_adi" "$hesap_no" "$nakit" "$hisse" "$toplam"
-
-            toplam_nakit=$(echo "$toplam_nakit + $nakit" | bc 2>/dev/null || echo "$toplam_nakit")
-            toplam_hisse=$(echo "$toplam_hisse + $hisse" | bc 2>/dev/null || echo "$toplam_hisse")
-            toplam_genel=$(echo "$toplam_genel + $toplam" | bc 2>/dev/null || echo "$toplam_genel")
             satir_var=1
         done
     done
@@ -1387,15 +1390,15 @@ tum_portfoyler() {
 
     for kurum_klasoru in /tmp/borsa/*/; do
         [[ -d "$kurum_klasoru" ]] || continue
-        local kurum_adi
-        kurum_adi=$(basename "$kurum_klasoru")
+        local kurum_adi="${kurum_klasoru%/}"
+        kurum_adi="${kurum_adi##*/}"
         [[ "$kurum_adi" == "_vt_yedek" ]] && continue
 
         local hesap_klasoru
         for hesap_klasoru in "${kurum_klasoru}"*/; do
             [[ -d "$hesap_klasoru" ]] || continue
-            local hesap_no
-            hesap_no=$(basename "$hesap_klasoru")
+            local hesap_no="${hesap_klasoru%/}"
+            hesap_no="${hesap_no##*/}"
             [[ -f "${hesap_klasoru}${_CEKIRDEK_DOSYA_COOKIE}" ]] || continue
 
             local surucu="${BORSA_KLASORU}/adaptorler/${kurum_adi}.sh"
@@ -1425,15 +1428,15 @@ tum_emirler() {
 
     for kurum_klasoru in /tmp/borsa/*/; do
         [[ -d "$kurum_klasoru" ]] || continue
-        local kurum_adi
-        kurum_adi=$(basename "$kurum_klasoru")
+        local kurum_adi="${kurum_klasoru%/}"
+        kurum_adi="${kurum_adi##*/}"
         [[ "$kurum_adi" == "_vt_yedek" ]] && continue
 
         local hesap_klasoru
         for hesap_klasoru in "${kurum_klasoru}"*/; do
             [[ -d "$hesap_klasoru" ]] || continue
-            local hesap_no
-            hesap_no=$(basename "$hesap_klasoru")
+            local hesap_no="${hesap_klasoru%/}"
+            hesap_no="${hesap_no##*/}"
             [[ -f "${hesap_klasoru}${_CEKIRDEK_DOSYA_COOKIE}" ]] || continue
 
             local surucu="${BORSA_KLASORU}/adaptorler/${kurum_adi}.sh"
@@ -1464,15 +1467,15 @@ tum_oturumlar() {
     local kurum_klasoru
     for kurum_klasoru in /tmp/borsa/*/; do
         [[ -d "$kurum_klasoru" ]] || continue
-        local kurum_adi
-        kurum_adi=$(basename "$kurum_klasoru")
+        local kurum_adi="${kurum_klasoru%/}"
+        kurum_adi="${kurum_adi##*/}"
         [[ "$kurum_adi" == "_vt_yedek" ]] && continue
 
         local hesap_klasoru
         for hesap_klasoru in "${kurum_klasoru}"*/; do
             [[ -d "$hesap_klasoru" ]] || continue
-            local hesap_no
-            hesap_no=$(basename "$hesap_klasoru")
+            local hesap_no="${hesap_klasoru%/}"
+            hesap_no="${hesap_no##*/}"
             [[ -f "${hesap_klasoru}${_CEKIRDEK_DOSYA_COOKIE}" ]] || continue
 
             # Kalan sure
@@ -1485,7 +1488,7 @@ tum_oturumlar() {
             local koruma="YOK"
             if [[ -f "${hesap_klasoru}oturum_koruma.pid" ]]; then
                 local pid
-                pid=$(cat "${hesap_klasoru}oturum_koruma.pid" 2>/dev/null)
+                pid=$(<"${hesap_klasoru}oturum_koruma.pid") 2>/dev/null || pid=""
                 if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
                     koruma="AKTIF"
                 fi
@@ -1494,10 +1497,9 @@ tum_oturumlar() {
             # Robot sayisi
             local robot_bilgi="YOK"
             if [[ -d "${hesap_klasoru}robotlar" ]]; then
-                local robot_sayisi
-                robot_sayisi=$(find "${hesap_klasoru}robotlar" -name "*.pid" 2>/dev/null | wc -l)
-                if [[ "$robot_sayisi" -gt 0 ]]; then
-                    robot_bilgi="${robot_sayisi} adet"
+                local _pid_dosyalari=("${hesap_klasoru}robotlar"/*.pid)
+                if [[ -e "${_pid_dosyalari[0]}" ]]; then
+                    robot_bilgi="${#_pid_dosyalari[@]} adet"
                 fi
             fi
 
@@ -1853,10 +1855,10 @@ borsa() {
     if [[ "${_CEKIRDEK_SON_ADAPTOR:-}" != "$kurum" ]]; then
         # readonly degiskenler bash'te kaldirilamaz (unset/declare +r calismaz).
         # Hata mesajlarini bastirmak icin sadece tanimsiz ise unset dene.
-        if ! readonly -p 2>/dev/null | grep -q 'ADAPTOR_ADI'; then
+        if ! declare -p ADAPTOR_ADI 2>/dev/null | grep -q 'readonly'; then
             unset ADAPTOR_ADI 2>/dev/null || true
         fi
-        if ! readonly -p 2>/dev/null | grep -q 'ADAPTOR_SURUMU'; then
+        if ! declare -p ADAPTOR_SURUMU 2>/dev/null | grep -q 'readonly'; then
             unset ADAPTOR_SURUMU 2>/dev/null || true
         fi
         _CEKIRDEK_SON_ADAPTOR="$kurum"
